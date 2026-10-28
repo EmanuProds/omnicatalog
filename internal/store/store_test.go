@@ -12,10 +12,10 @@ func setupTestStore(t *testing.T) (*Store, func()) {
 	dbPath := filepath.Join(tmpDir, "test.db")
 	migrationDir := filepath.Join(tmpDir, "migrations")
 
-	// Copia migration para temp dir
+	// Copy migration to temp dir
 	err := os.MkdirAll(migrationDir, 0755)
 	if err != nil {
-		t.Fatalf("erro criando migration dir: %v", err)
+		t.Fatalf("error creating migration dir: %v", err)
 	}
 	err = os.WriteFile(filepath.Join(migrationDir, "001_initial_schema.sql"), []byte(`
 CREATE TABLE IF NOT EXISTS providers (
@@ -95,12 +95,12 @@ CREATE TABLE IF NOT EXISTS scheduler_runs (
 );
 `), 0644)
 	if err != nil {
-		t.Fatalf("erro escrevendo migration: %v", err)
+		t.Fatalf("error writing migration: %v", err)
 	}
 
 	s, err := NewStore(dbPath, migrationDir)
 	if err != nil {
-		t.Fatalf("erro criando store: %v", err)
+		t.Fatalf("error creating store: %v", err)
 	}
 
 	cleanup := func() {
@@ -124,16 +124,16 @@ func TestStore_ProviderCRUD(t *testing.T) {
 	}
 	err := s.UpsertProvider(p)
 	if err != nil {
-		t.Fatalf("UpsertProvider falhou: %v", err)
+		t.Fatalf("UpsertProvider failed: %v", err)
 	}
 
 	// Read
 	got, err := s.GetProvider("test-provider")
 	if err != nil {
-		t.Fatalf("GetProvider falhou: %v", err)
+		t.Fatalf("GetProvider failed: %v", err)
 	}
 	if got == nil {
-		t.Fatal("provider não encontrado")
+		t.Fatal("provider not found")
 	}
 	if got.ID != p.ID || got.Name != p.Name || got.Status != p.Status || got.FreeTier != p.FreeTier {
 		t.Errorf("provider mismatch: got %+v, want %+v", got, p)
@@ -143,24 +143,24 @@ func TestStore_ProviderCRUD(t *testing.T) {
 	p.Status = "error"
 	err = s.UpsertProvider(p)
 	if err != nil {
-		t.Fatalf("UpsertProvider update falhou: %v", err)
+		t.Fatalf("UpsertProvider update failed: %v", err)
 	}
 
 	got, err = s.GetProvider("test-provider")
 	if err != nil {
-		t.Fatalf("GetProvider after update falhou: %v", err)
+		t.Fatalf("GetProvider after update failed: %v", err)
 	}
 	if got.Status != "error" {
-		t.Errorf("status não atualizado: got %s", got.Status)
+		t.Errorf("status not updated: got %s", got.Status)
 	}
 
 	// List
 	providers, err := s.GetProviders()
 	if err != nil {
-		t.Fatalf("GetProviders falhou: %v", err)
+		t.Fatalf("GetProviders failed: %v", err)
 	}
 	if len(providers) != 1 {
-		t.Errorf("esperado 1 provider, got %d", len(providers))
+		t.Errorf("expected 1 provider, got %d", len(providers))
 	}
 }
 
@@ -168,14 +168,14 @@ func TestStore_ModelCRUD(t *testing.T) {
 	s, cleanup := setupTestStore(t)
 	defer cleanup()
 
-	// Primeiro cria provider
+	// Create provider first
 	err := s.UpsertProvider(&Provider{
 		ID:     "anthropic",
 		Name:   "Anthropic",
 		Status: "connected",
 	})
 	if err != nil {
-		t.Fatalf("erro criando provider: %v", err)
+		t.Fatalf("error creating provider: %v", err)
 	}
 
 	// Create model
@@ -195,16 +195,16 @@ func TestStore_ModelCRUD(t *testing.T) {
 	}
 	err = s.UpsertModel(m)
 	if err != nil {
-		t.Fatalf("UpsertModel falhou: %v", err)
+		t.Fatalf("UpsertModel failed: %v", err)
 	}
 
 	// Read
 	got, err := s.GetModel(m.ID)
 	if err != nil {
-		t.Fatalf("GetModel falhou: %v", err)
+		t.Fatalf("GetModel failed: %v", err)
 	}
 	if got == nil {
-		t.Fatal("model não encontrado")
+		t.Fatal("model not found")
 	}
 	if got.ID != m.ID || got.ProviderID != m.ProviderID || *got.ContextWindow != *m.ContextWindow {
 		t.Errorf("model mismatch: got %+v, want %+v", got, m)
@@ -213,10 +213,10 @@ func TestStore_ModelCRUD(t *testing.T) {
 	// Filter
 	models, err := s.GetModels(ModelFilter{ProviderID: "anthropic", IsFree: boolPtr(true)})
 	if err != nil {
-		t.Fatalf("GetModels filter falhou: %v", err)
+		t.Fatalf("GetModels filter failed: %v", err)
 	}
 	if len(models) != 1 {
-		t.Errorf("esperado 1 modelo filtrado, got %d", len(models))
+		t.Errorf("expected 1 filtered model, got %d", len(models))
 	}
 }
 
@@ -231,21 +231,21 @@ func TestStore_Validation(t *testing.T) {
 		Status: "connected",
 	})
 	if err != nil {
-		t.Fatalf("erro criando provider: %v", err)
+		t.Fatalf("error creating provider: %v", err)
 	}
 
 	// Create model first
 	ctx := 1000000
 	m := &Model{
-		ID:            "test/model",
-		ProviderID:    "test",
-		Name:          "Test Model",
-		ContextWindow: &ctx,
-		SupportsTools: true,
+		ID:             "test/model",
+		ProviderID:     "test",
+		Name:           "Test Model",
+		ContextWindow:  &ctx,
+		SupportsTools:  true,
 	}
 	err = s.UpsertModel(m)
 	if err != nil {
-		t.Fatalf("erro criando model: %v", err)
+		t.Fatalf("error creating model: %v", err)
 	}
 
 	// Save validation
@@ -258,16 +258,16 @@ func TestStore_Validation(t *testing.T) {
 	}
 	err = s.SaveValidation(v)
 	if err != nil {
-		t.Fatalf("SaveValidation falhou: %v", err)
+		t.Fatalf("SaveValidation failed: %v", err)
 	}
 
 	// Get latest
 	got, err := s.GetLatestValidation(m.ID, "api_tool_call")
 	if err != nil {
-		t.Fatalf("GetLatestValidation falhou: %v", err)
+		t.Fatalf("GetLatestValidation failed: %v", err)
 	}
 	if got == nil {
-		t.Fatal("validation não encontrada")
+		t.Fatal("validation not found")
 	}
 	if got.Status != "passed" || got.ValidationType != "api_tool_call" {
 		t.Errorf("validation mismatch: got %+v", got)
@@ -285,20 +285,20 @@ func TestStore_Benchmark(t *testing.T) {
 		Status: "connected",
 	})
 	if err != nil {
-		t.Fatalf("erro criando provider: %v", err)
+		t.Fatalf("error creating provider: %v", err)
 	}
 
 	ctx := 1000000
 	m := &Model{
-		ID:            "test/model",
-		ProviderID:    "test",
-		Name:          "Test Model",
-		ContextWindow: &ctx,
-		SupportsTools: true,
+		ID:             "test/model",
+		ProviderID:     "test",
+		Name:           "Test Model",
+		ContextWindow:  &ctx,
+		SupportsTools:  true,
 	}
 	err = s.UpsertModel(m)
 	if err != nil {
-		t.Fatalf("erro criando model: %v", err)
+		t.Fatalf("error creating model: %v", err)
 	}
 
 	ttft := 500
@@ -307,25 +307,25 @@ func TestStore_Benchmark(t *testing.T) {
 	toolLat := 1200
 	speed := "fast"
 	b := &Benchmark{
-		ModelID:       m.ID,
-		TTFTMs:        &ttft,
-		TPS:           &tps,
-		TotalMs:       &total,
-		ToolLatencyMs: &toolLat,
-		SpeedClass:    speed,
-		BenchmarkedAt: time.Now().Format(time.RFC3339),
+		ModelID:        m.ID,
+		TTFTMs:         &ttft,
+		TPS:            &tps,
+		TotalMs:        &total,
+		ToolLatencyMs:  &toolLat,
+		SpeedClass:     speed,
+		BenchmarkedAt:  time.Now().Format(time.RFC3339),
 	}
 	err = s.SaveBenchmark(b)
 	if err != nil {
-		t.Fatalf("SaveBenchmark falhou: %v", err)
+		t.Fatalf("SaveBenchmark failed: %v", err)
 	}
 
 	got, err := s.GetBenchmark(m.ID)
 	if err != nil {
-		t.Fatalf("GetBenchmark falhou: %v", err)
+		t.Fatalf("GetBenchmark failed: %v", err)
 	}
 	if got == nil {
-		t.Fatal("benchmark não encontrado")
+		t.Fatal("benchmark not found")
 	}
 	if *got.TTFTMs != ttft || *got.TPS != tps || got.SpeedClass != speed {
 		t.Errorf("benchmark mismatch: got %+v", got)
@@ -343,7 +343,7 @@ func TestStore_Combo(t *testing.T) {
 	c := &Combo{
 		ID:                   "orchestrate",
 		Name:                 "Orchestrate Combo",
-		Description:          "Raciocínio, planejamento, arquitetura, delegação",
+		Description:          "Reasoning, planning, architecture, delegation",
 		TargetModelIDs:       target,
 		FallbackModelIDs:     fallback,
 		RequiredCapabilities: caps,
@@ -354,15 +354,15 @@ func TestStore_Combo(t *testing.T) {
 	}
 	err := s.UpsertCombo(c)
 	if err != nil {
-		t.Fatalf("UpsertCombo falhou: %v", err)
+		t.Fatalf("UpsertCombo failed: %v", err)
 	}
 
 	got, err := s.GetCombo("orchestrate")
 	if err != nil {
-		t.Fatalf("GetCombo falhou: %v", err)
+		t.Fatalf("GetCombo failed: %v", err)
 	}
 	if got == nil {
-		t.Fatal("combo não encontrado")
+		t.Fatal("combo not found")
 	}
 	if got.ID != c.ID || len(got.TargetModelIDs) != 2 || len(got.FallbackModelIDs) != 1 {
 		t.Errorf("combo mismatch: got %+v", got)
@@ -370,10 +370,10 @@ func TestStore_Combo(t *testing.T) {
 
 	combos, err := s.GetCombos()
 	if err != nil {
-		t.Fatalf("GetCombos falhou: %v", err)
+		t.Fatalf("GetCombos failed: %v", err)
 	}
 	if len(combos) != 1 {
-		t.Errorf("esperado 1 combo, got %d", len(combos))
+		t.Errorf("expected 1 combo, got %d", len(combos))
 	}
 }
 
@@ -392,10 +392,10 @@ func TestStore_SchedulerRun(t *testing.T) {
 	}
 	id, err := s.CreateSchedulerRun(run)
 	if err != nil {
-		t.Fatalf("CreateSchedulerRun falhou: %v", err)
+		t.Fatalf("CreateSchedulerRun failed: %v", err)
 	}
 	if id <= 0 {
-		t.Fatal("ID inválido")
+		t.Fatal("invalid ID")
 	}
 
 	run.ID = id
@@ -404,18 +404,18 @@ func TestStore_SchedulerRun(t *testing.T) {
 	run.CompletedAt = &completed
 	err = s.UpdateSchedulerRun(run)
 	if err != nil {
-		t.Fatalf("UpdateSchedulerRun falhou: %v", err)
+		t.Fatalf("UpdateSchedulerRun failed: %v", err)
 	}
 
 	runs, err := s.GetSchedulerRuns(10)
 	if err != nil {
-		t.Fatalf("GetSchedulerRuns falhou: %v", err)
+		t.Fatalf("GetSchedulerRuns failed: %v", err)
 	}
 	if len(runs) != 1 {
-		t.Errorf("esperado 1 run, got %d", len(runs))
+		t.Errorf("expected 1 run, got %d", len(runs))
 	}
 	if runs[0].Status != "completed" {
-		t.Errorf("status não atualizado: %s", runs[0].Status)
+		t.Errorf("status not updated: %s", runs[0].Status)
 	}
 }
 

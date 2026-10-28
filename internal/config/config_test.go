@@ -7,7 +7,7 @@ import (
 )
 
 func TestLoad_Defaults(t *testing.T) {
-	// Cria config temporário
+	// Create temporary config
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
@@ -70,10 +70,10 @@ logging:
 `
 	err := os.WriteFile(configPath, []byte(configContent), 0644)
 	if err != nil {
-		t.Fatalf("erro criando config: %v", err)
+		t.Fatalf("error creating config: %v", err)
 	}
 
-	// Testa carregamento via env var apontando para o config file
+	// Test loading via env var pointing to config file
 	os.Setenv("OMNICATALOG_CONFIG", configPath)
 	os.Setenv("OMNICATALOG_DATABASE_PATH", filepath.Join(tmpDir, "test.db"))
 	defer os.Unsetenv("OMNICATALOG_CONFIG")
@@ -81,14 +81,14 @@ logging:
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load() falhou: %v", err)
+		t.Fatalf("Load() failed: %v", err)
 	}
 
 	if cfg.OmniRoute.BaseURL != "http://test:20128" {
-		t.Errorf("BaseURL esperado 'http://test:20128', got '%s'", cfg.OmniRoute.BaseURL)
+		t.Errorf("expected BaseURL 'http://test:20128', got '%s'", cfg.OmniRoute.BaseURL)
 	}
 	if cfg.Database.Path != filepath.Join(tmpDir, "test.db") {
-		t.Errorf("Database path expandido incorretamente: %s", cfg.Database.Path)
+		t.Errorf("Database path expanded incorrectly: %s", cfg.Database.Path)
 	}
 }
 
@@ -116,7 +116,7 @@ func TestResolveSecret(t *testing.T) {
 	secretFile := filepath.Join(tmpDir, "secret.txt")
 	err := os.WriteFile(secretFile, []byte("  my-secret-value  "), 0644)
 	if err != nil {
-		t.Fatalf("erro criando secret: %v", err)
+		t.Fatalf("error creating secret: %v", err)
 	}
 
 	tests := []struct {
@@ -125,7 +125,7 @@ func TestResolveSecret(t *testing.T) {
 	}{
 		{"plain-value", "plain-value"},
 		{"{file:" + secretFile + "}", "my-secret-value"},
-		{"{file:/nonexistent}", "{file:/nonexistent}"}, // arquivo não existe, retorna original
+		{"{file:/nonexistent}", "{file:/nonexistent}"}, // file doesn't exist, returns original
 	}
 
 	for _, tt := range tests {
