@@ -227,9 +227,9 @@ prompt_config() {
         *) SCHEDULE="daily"; CUSTOM_CRON="" ;;
     esac
 
-    # Data directory
-    read -p "Data directory [$DEFAULT_DATA_DIR]: " DATA_DIR
-    DATA_DIR=${DATA_DIR:-$DEFAULT_DATA_DIR}
+    # Data directory is FIXED
+    DATA_DIR="$DEFAULT_DATA_DIR"
+    log_info "Data directory: $DATA_DIR (fixed)"
 
     # Log file path
     read -p "Log file path [/var/log/omnicatalog.log]: " LOG_FILE
@@ -247,7 +247,7 @@ prompt_config() {
     echo "  API Key: ${API_KEY:-[not set, will use env/file]}"
     echo "  Schedule: $SCHEDULE${CUSTOM_CRON:+ (custom: $CUSTOM_CRON)}"
     echo "  Config dir: $CONFIG_DIR (fixed)"
-    echo "  Data dir: $DATA_DIR"
+    echo "  Data dir: $DATA_DIR (fixed)"
     echo "  Log file: $LOG_FILE"
     echo "  Service user: $SERVICE_USER"
     echo
