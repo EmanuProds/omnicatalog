@@ -231,9 +231,9 @@ prompt_config() {
     DATA_DIR="$DEFAULT_DATA_DIR"
     log_info "Data directory: $DATA_DIR (fixed)"
 
-    # Log file path
-    read -p "Log file path [/var/log/omnicatalog.log]: " LOG_FILE
-    LOG_FILE=${LOG_FILE:-/var/log/omnicatalog.log}
+    # Log file path is FIXED
+    LOG_FILE="/var/log/omnicatalog.log"
+    log_info "Log file: $LOG_FILE (fixed)"
 
     # User to run service
     echo
@@ -248,7 +248,7 @@ prompt_config() {
     echo "  Schedule: $SCHEDULE${CUSTOM_CRON:+ (custom: $CUSTOM_CRON)}"
     echo "  Config dir: $CONFIG_DIR (fixed)"
     echo "  Data dir: $DATA_DIR (fixed)"
-    echo "  Log file: $LOG_FILE"
+    echo "  Log file: $LOG_FILE (fixed)"
     echo "  Service user: $SERVICE_USER"
     echo
     read -p "Proceed with installation? [y/N]: " CONFIRM
