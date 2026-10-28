@@ -1,0 +1,44 @@
+# Binaries
+build/
+*.exe
+*.test
+
+# Go
+go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config local (secrets)
+*.local.yaml
+*.local.yml
+.env
+.env.*
+
+# Logs
+*.log
+/var/log/omnicatalog.log
+
+# Database
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+~/.local/share/omnicatalog/
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Misc
+*.orig
+*.bak

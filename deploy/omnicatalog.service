@@ -1,0 +1,32 @@
+[Unit]
+Description=OmniRoute Model Catalog Validator for OpenCode
+After=network-online.target omniroute.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=emanuel
+Group=emanuel
+WorkingDirectory=/home/emanuel/Projetos/AI/opencode-hardness
+ExecStart=/usr/local/bin/omnicatalog daemon --config /home/emanuel/.config/omnicatalog/config.yaml
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=omnicatalog
+
+# Limites de recursos (mínimo RAM)
+MemoryLimit=256M
+MemorySwapMax=0
+CPUQuota=50%
+
+# Segurança
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/emanuel/.local/share/omnicatalog /home/emanuel/.config/omnicatalog /var/log/omnicatalog.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,58 @@
+# Configuração do OmniCatalog
+# Copie para ~/.config/omnicatalog/config.yaml ou /etc/omnicatalog/config.yaml
+
+omniroute:
+  base_url: "http://localhost:20128"
+  api_key: "{env:OMNIROUTE_API_KEY}"  # Ou use {file:~/.config/omnicatalog/api_key}
+  timeout: 30s
+
+opencode:
+  config_path: "~/.config/opencode/opencode.json"  # GLOBAL
+  backup_before_update: true
+
+validation:
+  api_tool_call_timeout: 30s
+  opencode_test_timeout: 60s
+  max_concurrent_tests: 3
+  revalidate_after_hours: 24
+
+speed_test:
+  warmup_requests: 1
+  ttft_samples: 3
+  throughput_tokens: 500
+  min_ttft_ms: 3000
+  min_tps: 20
+  tool_call_samples: 2
+
+context_validation:
+  enabled: true
+  test_tokens: 100000        # Testa com request de 100k tokens
+  min_context_orchestrate: 1000000
+  min_context_code: 200000
+  min_context_review: 1000000
+  min_context_contracts: 200000
+  min_context_database: 200000
+  min_context_docs: 1000000
+
+free_validation:
+  enabled: true
+  window_per_provider_sec: 30
+  max_concurrent_providers: 5
+  test_method: "billing_check"  # "billing_check" | "quota_endpoint" | "usage_headers"
+  cache_ttl_hours: 24
+
+scheduler:
+  enabled: true
+  schedule: "daily"              # daily, weekly, custom (cron expression)
+  custom_cron: ""                # ex: "0 3 * * 1,3,5" (seg/qua/sex 3h)
+  run_on_startup: true
+
+database:
+  path: "~/.local/share/omnicatalog/catalog.db"
+  migration_dir: "./migrations"
+
+logging:
+  level: "info"                  # debug, info, warn, error
+  format: "text"                 # json, text
+  output: "stdout"               # stdout, file, both
+  file_path: "/var/log/omnicatalog.log"
