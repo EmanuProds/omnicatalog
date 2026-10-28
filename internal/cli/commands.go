@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,8 +13,12 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"omnicatalog/internal/combo"
 	"omnicatalog/internal/config"
+	"omnicatalog/internal/discovery"
+	"omnicatalog/internal/omniroute"
 	"omnicatalog/internal/store"
+	"omnicatalog/internal/validation"
 )
 
 func NewRootCommand(cfg *config.Config, version, commit, buildDate string) *cobra.Command {
@@ -53,15 +58,73 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 		Long:  `Discovers providers/models, validates free tier, tool calling, context and speed, updates combos in OmniRoute and opencode.json.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
-			log.Info().Bool("dry_run", dryRun).Msg("Starting full validation")
+			onlyNew, _ := cmd.Flags().GetBool("only-new")
+			forceRevalidate, _ := cmd.Flags().GetBool("force-revalidate")
+			
+			log.Info().
+				Bool("dry_run", dryRun).
+				Bool("only_new", onlyNew).
+				Bool("force_revalidate", forceRevalidate).
+				Msg("Starting full validation")
 
-			// TODO: Implement full validation
-			fmt.Println("⚠️  Command 'run' not yet implemented")
-			fmt.Println("   Next steps: implement internal/validator, internal/benchmark, internal/combo")
+			ctx := context.Background()
+
+			// Initialize all components
+			client := omniroute.NewClient(cfg)
+			storeInstance, err := store.NewStore(cfg.Database.Path, cfg.Database.MigrationDir)
+			if err != nil {
+				return fmt.Errorf("failed to open database: %w", err)
+			}
+			defer storeInstance.Close()
+
+			discoverySvc := discovery.NewDiscovery(cfg, storeInstance)
+			freeValidator := validation.NewFreeValidator(cfg, storeInstance, discoverySvc, client)
+			toolValidator := validation.NewToolValidator(cfg, storeInstance, discoverySvc, client)
+			contextValidator := validation.NewContextValidator(cfg, storeInstance, discoverySvc, client)
+			speedBench := validation.NewSpeedBenchmark(cfg, storeInstance, discoverySvc, client)
+			comboMgr := combo.NewComboManager(cfg, storeInstance, client)
+
+			// Phase 1: Discovery
+			log.Info().Msg("Phase 1: Discovery")
+			if err := discoverySvc.SyncAll(ctx); err != nil {
+				return fmt.Errorf("discovery phase failed: %w", err)
+			}
+
+			// Phase 2: Free tier validation
+			log.Info().Msg("Phase 2: Free tier validation")
+			if err := freeValidator.ValidateFreeTier(ctx); err != nil {
+				return fmt.Errorf("free tier validation failed: %w", err)
+			}
+
+			// Phase 3: Tool calling validation
+			log.Info().Msg("Phase 3: Tool calling validation")
+			if err := toolValidator.ValidateToolCalling(ctx); err != nil {
+				return fmt.Errorf("tool calling validation failed: %w", err)
+			}
+
+			// Phase 4: Context validation
+			log.Info().Msg("Phase 4: Context validation")
+			if err := contextValidator.ValidateContext(ctx); err != nil {
+				return fmt.Errorf("context validation failed: %w", err)
+			}
+
+			// Phase 5: Speed benchmark
+			log.Info().Msg("Phase 5: Speed benchmark")
+			if err := speedBench.RunBenchmarks(ctx); err != nil {
+				return fmt.Errorf("speed benchmark failed: %w", err)
+			}
+
+			// Phase 6: Combo update
+			log.Info().Msg("Phase 6: Combo update")
+			if err := comboMgr.UpdateCombos(ctx); err != nil {
+				return fmt.Errorf("combo update failed: %w", err)
+			}
 
 			if dryRun {
-				fmt.Println("   [DRY-RUN] No changes would be saved")
+				log.Info().Msg("DRY-RUN: No changes would be saved")
 			}
+
+			log.Info().Msg("Full validation completed successfully")
 			return nil
 		},
 	}
