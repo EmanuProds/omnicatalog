@@ -194,6 +194,10 @@ prompt_config() {
     log_info "=== OmniCatalog Configuration ==="
     echo
 
+    # Config directory is FIXED
+    CONFIG_DIR="$DEFAULT_CONFIG_DIR"
+    log_info "Config directory: $CONFIG_DIR (fixed)"
+
     # OmniRoute URL
     read -p "OmniRoute base URL [http://localhost:20128]: " OMNIROUTE_URL
     OMNIROUTE_URL=${OMNIROUTE_URL:-http://localhost:20128}
@@ -223,11 +227,6 @@ prompt_config() {
         *) SCHEDULE="daily"; CUSTOM_CRON="" ;;
     esac
 
-    # Config directory
-    echo
-    read -p "Config directory [$DEFAULT_CONFIG_DIR]: " CONFIG_DIR
-    CONFIG_DIR=${CONFIG_DIR:-$DEFAULT_CONFIG_DIR}
-
     # Data directory
     read -p "Data directory [$DEFAULT_DATA_DIR]: " DATA_DIR
     DATA_DIR=${DATA_DIR:-$DEFAULT_DATA_DIR}
@@ -247,7 +246,7 @@ prompt_config() {
     echo "  OmniRoute URL: $OMNIROUTE_URL"
     echo "  API Key: ${API_KEY:-[not set, will use env/file]}"
     echo "  Schedule: $SCHEDULE${CUSTOM_CRON:+ (custom: $CUSTOM_CRON)}"
-    echo "  Config dir: $CONFIG_DIR"
+    echo "  Config dir: $CONFIG_DIR (fixed)"
     echo "  Data dir: $DATA_DIR"
     echo "  Log file: $LOG_FILE"
     echo "  Service user: $SERVICE_USER"
