@@ -1,9 +1,9 @@
-# Configuração do OmniCatalog
-# Copie para ~/.config/omnicatalog/config.yaml ou /etc/omnicatalog/config.yaml
+# OmniCatalog Configuration
+# Copy to ~/.config/omnicatalog/config.yaml or /etc/omnicatalog/config.yaml
 
 omniroute:
   base_url: "http://localhost:20128"
-  api_key: "{env:OMNIROUTE_API_KEY}"  # Ou use {file:~/.config/omnicatalog/api_key}
+  api_key: "{env:OMNIROUTE_API_KEY}"  # Or use {file:~/.config/omnicatalog/api_key}
   timeout: 30s
 
 opencode:
@@ -26,7 +26,7 @@ speed_test:
 
 context_validation:
   enabled: true
-  test_tokens: 100000        # Testa com request de 100k tokens
+  test_tokens: 100000
   min_context_orchestrate: 1000000
   min_context_code: 200000
   min_context_review: 1000000
@@ -44,7 +44,7 @@ free_validation:
 scheduler:
   enabled: true
   schedule: "daily"              # daily, weekly, custom (cron expression)
-  custom_cron: ""                # ex: "0 3 * * 1,3,5" (seg/qua/sex 3h)
+  custom_cron: ""                # ex: "0 3 * * 1,3,5" (Mon/Wed/Fri 3am)
   run_on_startup: true
 
 database:

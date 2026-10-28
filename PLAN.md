@@ -565,3 +565,71 @@ require (
 - **OpenCode Agents**: `https://opencode.ai/docs/agents`
 - **OpenCode CLI**: `opencode run` for headless execution
 - **opencode-omniroute-auth**: Plugin reference for model fetching
+
+---
+
+## 14. Polish Options (Phase 10)
+
+### Option A: Basic Polish (Recommended - Execute Now)
+**Effort: Low | Time: ~1-2 days**
+
+**Deliverables:**
+1. **Structured Logging** - JSON/text output with levels (debug/info/warn/error), rotation
+2. **Health Check CLI** - `omnicatalog health` command to verify OmniRoute connectivity, DB, config
+3. **Install Script** - `scripts/install.sh` for automated systemd installation with config prompts
+3. **Uninstall Script** - `scripts/uninstall.sh` for clean removal
+4. **Basic Documentation** - README with quickstart, config reference, troubleshooting
+5. **Config Validation** - `omnicatalog config validate` with detailed output
+6. **Shell Completions** - `omnicatalog completion bash|zsh|fish`
+7. **Install Script** - `scripts/install.sh` with interactive config setup
+
+**Files to Create:**
+- `scripts/install.sh` - Interactive installer (prompts for OmniRoute URL, API key, schedule)
+- `scripts/uninstall.sh` - Clean removal (systemd, config, DB)
+- `scripts/health.sh` - Health check endpoint logic
+- Updated README with installation guide
+- Shell completion generation in CLI
+
+### Option B: Enhanced Polish
+**Effort: Medium | Time: ~2-3 days**
+
+**Deliverables (includes A):**
+1. **Man Pages** - `omnicatalog.1` generated from CLI help
+2. **Config Validation CLI** - Extended `omnicatalog config validate` with detailed checks
+3. **Metrics Logging** - Periodic log of cache stats, validation rates, combo status
+4. **Config Migration** - Auto-migrate old config versions on startup
+5. **Dry-run Improvements** - `--dry-run` shows planned changes without executing
+5. **Config Diff** - `omnicatalog config diff` shows diff vs defaults
+6. **Log Rotation Config** - Sample logrotate config in deploy/
+7. **Shell Completions** - Enhanced with flag descriptions
+8. **Debug Mode** - `--debug` flag for verbose tracing
+
+### Option C: Production Ready
+**Effort: Medium | Time: ~2-3 days**
+
+**Deliverables (includes A+B):**
+1. **Systemd Hardening Guide** - Documentation for production deployment
+2. **Log Rotation Config** - Deploy logrotate config with size/time limits
+3. **Uninstall Verification** - Post-uninstall checks (no orphan files/processes)
+4. **Backup/Restore** - `omnicatalog backup|restore` for DB and config
+5. **Config Encryption** - Optional encryption for sensitive config values
+6. **Multi-user Support** - Per-user config isolation
+6. **SELinux/AppArmor Profiles** - Sample profiles in deploy/
+7. **Upgrade Path** - Version migration scripts
+8. **Performance Benchmarks** - CI benchmarks for regression detection
+9. **Release Automation** - GitHub Actions for build/release
+
+### Option D: Skip Polish
+- Core functionality complete, deploy as-is
+- Zero effort, immediate deploy
+
+---
+
+## 14. Technical References
+
+- **OmniRoute API**: `skills/omni-providers`, `skills/omni-models`, `skills/omni-combos-routing`
+- **OmniRoute Models Endpoint**: `GET /api/v1/models`, `POST /api/v1/models/query`
+- **OpenCode Config**: `https://opencode.ai/config.json` schema
+- **OpenCode Agents**: `https://opencode.ai/docs/agents`
+- **OpenCode CLI**: `opencode run` for headless execution
+- **opencode-omniroute-auth**: Plugin reference for model fetching

@@ -2,7 +2,13 @@ package cli
 
 import (
 	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -33,6 +39,8 @@ func NewRootCommand(cfg *config.Config, version, commit, buildDate string) *cobr
 	rootCmd.AddCommand(newCombosCommand(cfg))
 	rootCmd.AddCommand(newConfigCommand(cfg))
 	rootCmd.AddCommand(newScheduleCommand(cfg))
+	rootCmd.AddCommand(newHealthCommand(cfg))
+	rootCmd.AddCommand(newCompletionCommand())
 	rootCmd.AddCommand(newVersionCommand(version, commit, buildDate))
 
 	return rootCmd
@@ -295,6 +303,174 @@ func newVersionCommand(version, commit, buildDate string) *cobra.Command {
 			fmt.Printf("  Built:      %s\n", buildDate)
 			fmt.Printf("  Go:         %s\n", runtime.Version())
 			fmt.Printf("  OS/Arch:    %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		},
+	}
+}
+
+func newHealthCommand(cfg *config.Config) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "health",
+		Short: "Checks OmniRoute connectivity, database, and configuration",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			configPath, _ := cmd.Flags().GetString("config")
+			if configPath == "" {
+				configPath = "~/.config/omnicatalog/config.yaml"
+			}
+			configPath = expandPath(configPath)
+
+			fmt.Println("OmniCatalog Health Check")
+			fmt.Println("========================")
+			fmt.Println()
+
+			failed := 0
+
+			// Check config file
+			configFile := configPath
+			if configFile == "~/.config/omnicatalog/config.yaml" {
+				configFile = os.Getenv("HOME") + "/.config/omnicatalog/config.yaml"
+			}
+			if _, err := os.Stat(configFile); err != nil {
+				fmt.Printf("[FAIL] Config file not found: %s\n", configFile)
+				failed++
+			} else {
+				fmt.Printf("[OK] Config file: %s\n", configFile)
+			}
+
+			// Load config
+			cfg, err := config.Load()
+			if err != nil {
+				fmt.Printf("[FAIL] Config load failed: %v\n", err)
+				failed++
+			} else {
+				fmt.Printf("[OK] Config loaded\n")
+
+				// Check OmniRoute
+				if cfg.OmniRoute.APIKey != "" {
+					fmt.Printf("[OK] API key configured\n")
+				} else {
+					fmt.Printf("[WARN] API key not set (use OMNIROUTE_API_KEY env or {file:...})\n")
+				}
+
+				// Test OmniRoute connectivity
+				if cfg.OmniRoute.BaseURL != "" {
+					fmt.Printf("Testing %s/api/providers... ", cfg.OmniRoute.BaseURL)
+					client := &http.Client{Timeout: 10 * time.Second}
+					req, _ := http.NewRequest("GET", cfg.OmniRoute.BaseURL+"/api/providers", nil)
+					req.Header.Set("Authorization", "Bearer "+cfg.OmniRoute.APIKey)
+					resp, err := client.Do(req)
+					if err != nil {
+						fmt.Printf("[FAIL] OmniRoute unreachable: %v\n", err)
+						failed++
+					} else {
+						resp.Body.Close()
+						if resp.StatusCode == 200 {
+							fmt.Printf("[OK] OmniRoute reachable\n")
+						} else {
+							fmt.Printf("[FAIL] OmniRoute returned %d\n", resp.StatusCode)
+							failed++
+						}
+					}
+				}
+
+				// Check database
+				dbPath := cfg.Database.Path
+				if strings.HasPrefix(dbPath, "~/") {
+					dbPath = os.Getenv("HOME") + dbPath[1:]
+				}
+				if _, err := os.Stat(dbPath); err == nil {
+					fmt.Printf("[OK] Database: %s\n", dbPath)
+				} else {
+					fmt.Printf("[WARN] Database not found: %s\n", dbPath)
+				}
+			}
+
+			// Check binary
+			if _, err := exec.LookPath("omnicatalog"); err == nil {
+				fmt.Printf("[OK] Binary in PATH\n")
+			} else {
+				fmt.Printf("[WARN] Binary not in PATH\n")
+			}
+
+			// Check systemd
+			if systemctlEnabled("omnicatalog") {
+				if systemctlActive("omnicatalog") {
+					fmt.Printf("[OK] Service enabled and running\n")
+				} else {
+					fmt.Printf("[WARN] Service enabled but not running\n")
+				}
+			} else {
+				fmt.Printf("[WARN] Service not enabled\n")
+			}
+
+			fmt.Println()
+			fmt.Println("========================")
+			if failed == 0 {
+				fmt.Println("[OK] All checks passed!")
+				return nil
+			} else {
+				fmt.Printf("[FAIL] %d check(s) failed\n", failed)
+				return fmt.Errorf("%d check(s) failed", failed)
+			}
+		},
+	}
+	cmd.Flags().String("config", "", "Path to config file")
+	return cmd
+}
+
+func systemctlEnabled(unit string) bool {
+	cmd := exec.Command("systemctl", "is-enabled", unit)
+	err := cmd.Run()
+	return err == nil
+}
+
+func systemctlActive(unit string) bool {
+	cmd := exec.Command("systemctl", "is-active", unit)
+	err := cmd.Run()
+	return err == nil
+}
+
+func expandPath(path string) string {
+	if path == "" {
+		return path
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, path[2:])
+	}
+	if strings.HasPrefix(path, "$") {
+		return os.ExpandEnv(path)
+	}
+	return path
+}
+
+func newCompletionCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "completion [bash|zsh|fish|powershell]",
+		Short: "Generate shell completion script",
+		Long: `Generate shell completion script for omnicatalog.
+
+Examples:
+  omnicatalog completion bash > /etc/bash_completion.d/omnicatalog
+  omnicatalog completion zsh > ~/.zsh/completions/_omnicatalog
+  omnicatalog completion fish > ~/.config/fish/completions/omnicatalog.fish
+`,
+		Args: cobra.ExactArgs(1),
+		ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			shell := args[0]
+			rootCmd := cmd.Root()
+			switch shell {
+			case "bash":
+				return rootCmd.GenBashCompletion(os.Stdout)
+			case "zsh":
+				return rootCmd.GenZshCompletion(os.Stdout)
+			case "fish":
+				return rootCmd.GenFishCompletion(os.Stdout, true)
+			case "powershell":
+				return rootCmd.GenPowerShellCompletion(os.Stdout)
+			default:
+				return fmt.Errorf("unsupported shell: %s", shell)
+			}
 		},
 	}
 }

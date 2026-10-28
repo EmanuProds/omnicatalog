@@ -1,8 +1,8 @@
-# Makefile para omnicatalog
+# Makefile for omnicatalog
 
 .PHONY: build test lint fmt vet clean install uninstall run daemon status models combos config schedule version
 
-# Variáveis
+# Variables
 BINARY_NAME := omnicatalog
 BUILD_DIR := ./build
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -13,56 +13,56 @@ LDFLAGS := -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main
 # Default target
 all: build
 
-# Build do binário
+# Build binary
 build:
-	@echo "🔨 Building $(BINARY_NAME)..."
+	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(BUILD_DIR)
 	@go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/omnicatalog
-	@echo "✅ Build completo: $(BUILD_DIR)/$(BINARY_NAME)"
+	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)"
 
-# Build para produção (otimizado)
+# Production build (optimized)
 build-prod:
-	@echo "🔨 Building $(BINARY_NAME) (produção)..."
+	@echo "Building $(BINARY_NAME) (production)..."
 	@mkdir -p $(BUILD_DIR)
 	@CGO_ENABLED=1 go build -trimpath $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/omnicatalog
-	@echo "✅ Build produção completo: $(BUILD_DIR)/$(BINARY_NAME)"
+	@echo "Production build complete: $(BUILD_DIR)/$(BINARY_NAME)"
 
-# Testes
+# Tests
 test:
-	@echo "🧪 Executando testes..."
+	@echo "Running tests..."
 	@go test -v -race -count=1 ./...
 
 test-coverage:
-	@echo "🧪 Executando testes com cobertura..."
+	@echo "Running tests with coverage..."
 	@go test -v -race -count=1 -coverprofile=coverage.out ./...
 	@go tool cover -html=coverage.out -o coverage.html
-	@echo "📊 Cobertura gerada: coverage.html"
+	@echo "Coverage generated: coverage.html"
 
-# Linting e formatação
+# Linting and formatting
 lint:
-	@echo "🔍 Executando linters..."
-	@golangci-lint run ./... || echo "⚠️  golangci-lint não instalado, pulando..."
+	@echo "Running linters..."
+	@golangci-lint run ./... || echo "golangci-lint not installed, skipping..."
 
 fmt:
-	@echo "🎨 Formatando código..."
+	@echo "Formatting code..."
 	@go fmt ./...
 	@goimports -w .
 
 vet:
-	@echo "🔍 Executando go vet..."
+	@echo "Running go vet..."
 	@go vet ./...
 
-# Verificações completas
+# Complete checks
 check: fmt vet test
-	@echo "✅ Todas as verificações passaram"
+	@echo "All checks passed"
 
-# Execução
+# Execution
 run: build
-	@echo "🚀 Executando..."
+	@echo "Running..."
 	@$(BUILD_DIR)/$(BINARY_NAME) run
 
 daemon: build
-	@echo "🚀 Iniciando daemon..."
+	@echo "Starting daemon..."
 	@$(BUILD_DIR)/$(BINARY_NAME) daemon
 
 status: build
@@ -83,65 +83,65 @@ schedule: build
 version: build
 	@$(BUILD_DIR)/$(BINARY_NAME) version
 
-# Instalação systemd
+# Systemd installation
 install: build-prod
-	@echo "📦 Instalando $(BINARY_NAME)..."
+	@echo "Installing $(BINARY_NAME)..."
 	@sudo cp $(BUILD_DIR)/$(BINARY_NAME) /usr/local/bin/
 	@sudo cp deploy/omnicatalog.service /etc/systemd/system/
 	@sudo systemctl daemon-reload
 	@sudo systemctl enable --now omnicatalog
-	@echo "✅ Instalado e iniciado como systemd service"
+	@echo "Installed and started as systemd service"
 
 uninstall:
-	@echo "🗑️  Removendo $(BINARY_NAME)..."
+	@echo "Removing $(BINARY_NAME)..."
 	@sudo systemctl disable --now omnicatalog 2>/dev/null || true
 	@sudo rm -f /etc/systemd/system/omnicatalog.service
 	@sudo rm -f /usr/local/bin/$(BINARY_NAME)
 	@sudo systemctl daemon-reload
-	@echo "✅ Removido"
+	@echo "Removed"
 
-# Limpeza
+# Cleanup
 clean:
-	@echo "🧹 Limpando..."
+	@echo "Cleaning..."
 	@rm -rf $(BUILD_DIR)
 	@rm -f coverage.out coverage.html
 	@go clean -cache -modcache -testcache
 
-# Dependências
+# Dependencies
 deps:
-	@echo "📥 Baixando dependências..."
+	@echo "Downloading dependencies..."
 	@go mod download
 	@go mod tidy
 	@go mod verify
 
-# Gera mocks para testes (requer mockgen)
+# Generate mocks for tests (requires mockgen)
 mocks:
-	@echo "🎭 Gerando mocks..."
+	@echo "Generating mocks..."
 	@go generate ./...
 
 # Help
 help:
 	@echo "omnicatalog - Makefile targets:"
 	@echo ""
-	@echo "  build          - Compila o binário (dev)"
-	@echo "  build-prod     - Compila otimizado para produção"
-	@echo "  test           - Executa testes"
-	@echo "  test-coverage  - Executa testes com cobertura HTML"
-	@echo "  lint           - Executa golangci-lint"
-	@echo "  fmt            - Formata código (go fmt + goimports)"
-	@echo "  vet            - Executa go vet"
+	@echo "  build          - Compile binary (dev)"
+	@echo "  build-prod     - Compile optimized for production"
+	@echo "  test           - Run tests"
+	@echo "  test-coverage  - Run tests with HTML coverage"
+	@echo "  lint           - Run golangci-lint"
+	@echo "  fmt            - Format code (go fmt + goimports)"
+	@echo "  vet            - Run go vet"
 	@echo "  check          - fmt + vet + test"
-	@echo "  run            - Build e executa 'run'"
-	@echo "  daemon         - Build e executa 'daemon'"
-	@echo "  status         - Build e executa 'status'"
-	@echo "  models         - Build e lista modelos validados"
-	@echo "  combos         - Build e mostra combos"
-	@echo "  config         - Build e valida config"
-	@echo "  schedule       - Build e mostra agendamento"
-	@echo "  version        - Build e mostra versão"
-	@echo "  install        - Instala como systemd service (requer sudo)"
-	@echo "  uninstall      - Remove systemd service e binário"
-	@echo "  clean          - Limpa artifacts de build"
-	@echo "  deps           - Baixar e organizar dependências"
-	@echo "  mocks          - Gera mocks para testes"
-	@echo "  help           - Mostra esta ajuda"
+	@echo "  run            - Build and execute 'run'"
+	@echo "  daemon         - Build and execute 'daemon'"
+	@echo "  status         - Build and execute 'status'"
+	@echo "  models         - Build and list validated models"
+	@echo "  combos         - Build and show combos"
+	@echo "  config         - Build and validate config"
+	@echo "  schedule       - Build and show schedule"
+	@echo "  version        - Build and show version"
+	@echo "  install        - Install as systemd service (requires sudo)"
+	@echo "  uninstall      - Remove systemd service and binary"
+	@echo "  clean          - Clean build artifacts"
+	@echo "  deps           - Download and organize dependencies"
+	@echo "  mocks          - Generate mocks for tests"
+	@echo "  help           - Show this help"

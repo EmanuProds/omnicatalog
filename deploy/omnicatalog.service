@@ -8,7 +8,7 @@ StartLimitIntervalSec=0
 Type=simple
 User=emanuel
 Group=emanuel
-WorkingDirectory=/home/emanuel/Projetos/AI/opencode-hardness
+WorkingDirectory=/home/emanuel/Projetos/AI/omnicatalog
 ExecStart=/usr/local/bin/omnicatalog daemon --config /home/emanuel/.config/omnicatalog/config.yaml
 Restart=always
 RestartSec=10
@@ -16,12 +16,12 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=omnicatalog
 
-# Limites de recursos (mínimo RAM)
+# Resource limits (minimum RAM)
 MemoryLimit=256M
 MemorySwapMax=0
 CPUQuota=50%
 
-# Segurança
+# Security
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

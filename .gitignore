@@ -16,7 +16,7 @@ go.work
 .DS_Store
 Thumbs.db
 
-# Config local (secrets)
+# Config (secrets)
 *.local.yaml
 *.local.yml
 .env
