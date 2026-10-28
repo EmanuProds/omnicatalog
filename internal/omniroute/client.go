@@ -1,6 +1,7 @@
 package omniroute
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -457,7 +458,166 @@ func (c *Client) TestModelToolCalling(ctx context.Context, modelID string) (bool
 	return false, nil
 }
 
-// TestModelWithResponse tests a model and returns the full response
+// MeasureTTFT measures Time To First Token for a streaming request
+func (c *Client) MeasureTTFT(ctx context.Context, body map[string]any) (int, error) {
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	url := c.baseURL + "/v1/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return 0, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	start := time.Now()
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return 0, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Read the first chunk of the streaming response
+	reader := bufio.NewReader(resp.Body)
+	_, err = reader.ReadBytes('\n')
+	if err != nil {
+		return 0, fmt.Errorf("failed to read first chunk: %w", err)
+	}
+
+	return int(time.Since(start).Milliseconds()), nil
+}
+
+// MeasureThroughput measures tokens per second for a streaming request
+func (c *Client) MeasureThroughput(ctx context.Context, body map[string]any, expectedTokens int) (float64, error) {
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	url := c.baseURL + "/v1/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return 0, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	start := time.Now()
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return 0, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Count tokens in the streaming response
+	reader := bufio.NewReader(resp.Body)
+	tokenCount := 0
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			break
+		}
+		// Parse SSE data for token count
+		if bytes.HasPrefix(line, []byte("data: ")) {
+			data := bytes.TrimPrefix(line, []byte("data: "))
+			data = bytes.TrimSpace(data)
+			if string(data) == "[DONE]" {
+				break
+			}
+			var chunk map[string]any
+			if json.Unmarshal(data, &chunk) == nil {
+				if choices, ok := chunk["choices"].([]any); ok {
+					for _, choice := range choices {
+						if choiceMap, ok := choice.(map[string]any); ok {
+							if delta, ok := choiceMap["delta"].(map[string]any); ok {
+								if content, ok := delta["content"].(string); ok && content != "" {
+									tokenCount += len(content) / 4 // rough estimate: 4 chars per token
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	elapsed := time.Since(start).Seconds()
+	if elapsed <= 0 {
+		return 0, fmt.Errorf("elapsed time too small")
+	}
+
+	return float64(tokenCount) / elapsed, nil
+}
+
+// MeasureToolLatency measures tool call latency
+func (c *Client) MeasureToolLatency(ctx context.Context, body map[string]any) (int, error) {
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	url := c.baseURL + "/v1/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return 0, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	start := time.Now()
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return 0, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				ToolCalls []struct {
+					Function struct {
+						Name string `json:"name"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Check if tool was called
+	for _, choice := range result.Choices {
+		for _, tc := range choice.Message.ToolCalls {
+			if tc.Function.Name == "list_files" {
+				return int(time.Since(start).Milliseconds()), nil
+			}
+		}
+	}
+
+	return int(time.Since(start).Milliseconds()), fmt.Errorf("tool not called")
+}
 func (c *Client) TestModelWithResponse(ctx context.Context, body map[string]any) (*http.Response, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {

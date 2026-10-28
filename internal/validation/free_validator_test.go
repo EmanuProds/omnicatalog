@@ -378,6 +378,10 @@ CREATE TABLE IF NOT EXISTS validations (
 	}
 }
 
-func intPtr(i int) *int {
+func testIntPtr(i int) *int {
 	return &i
+}
+
+func testFloat64Ptr(f float64) *float64 {
+	return &f
 }
