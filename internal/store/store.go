@@ -372,7 +372,7 @@ func (s *Store) GetValidatedModels(minContext int) ([]ValidatedModel, error) {
 	query := `
 		SELECT m.id, m.provider_id, m.name, m.context_window, m.max_output_tokens,
 			m.supports_tools, m.supports_vision, m.supports_reasoning,
-			m.is_free, m.free_confirmed,
+			m.is_free, m.free_confirmed, m.capabilities,
 			b.speed_class, b.ttft_ms, b.tps, b.tool_latency_ms, b.benchmarked_at
 		FROM models m
 		LEFT JOIN benchmarks b ON m.id = b.model_id
@@ -385,8 +385,37 @@ func (s *Store) GetValidatedModels(minContext int) ([]ValidatedModel, error) {
 	if minContext > 0 {
 		query += " AND m.context_window >= ?"
 	}
-	var models []ValidatedModel
-	err := s.db.Select(&models, query, minContext)
+	var modelsRaw []ValidatedModelNamed
+	err := s.db.Select(&modelsRaw, query, minContext)
+	if err != nil {
+		return nil, err
+	}
+
+	models := make([]ValidatedModel, len(modelsRaw))
+	for i, m := range modelsRaw {
+		var caps map[string]any
+		if m.Capabilities != "" {
+			json.Unmarshal([]byte(m.Capabilities), &caps)
+		}
+		models[i] = ValidatedModel{
+			ID:                m.ID,
+			ProviderID:        m.ProviderID,
+			Name:              m.Name,
+			ContextWindow:     m.ContextWindow,
+			MaxOutputTokens:   m.MaxOutputTokens,
+			SupportsTools:     m.SupportsTools,
+			SupportsVision:    m.SupportsVision,
+			SupportsReasoning: m.SupportsReasoning,
+			IsFree:            m.IsFree,
+			FreeConfirmed:     m.FreeConfirmed,
+			SpeedClass:        m.SpeedClass,
+			TTFTMs:            m.TTFTMs,
+			TPS:               m.TPS,
+			ToolLatencyMs:     m.ToolLatencyMs,
+			BenchmarkedAt:     m.BenchmarkedAt,
+			Capabilities:      caps,
+		}
+	}
 	return models, err
 }
 
@@ -654,6 +683,25 @@ type Model struct {
 	DiscoveredAt      string         `db:"discovered_at" json:"discovered_at"`
 }
 
+type ValidatedModel struct {
+	ID                string         `json:"id"`
+	ProviderID        string         `json:"provider_id"`
+	Name              string         `json:"name"`
+	ContextWindow     *int           `json:"context_window,omitempty"`
+	MaxOutputTokens   *int           `json:"max_output_tokens,omitempty"`
+	SupportsTools     bool           `json:"supports_tools"`
+	SupportsVision    bool           `json:"supports_vision"`
+	SupportsReasoning bool           `json:"supports_reasoning"`
+	IsFree            bool           `json:"is_free"`
+	FreeConfirmed     bool           `json:"free_confirmed"`
+	SpeedClass        string         `json:"speed_class"`
+	TTFTMs            *int           `json:"ttft_ms,omitempty"`
+	TPS               *float64       `json:"tps,omitempty"`
+	ToolLatencyMs     *int           `json:"tool_latency_ms,omitempty"`
+	BenchmarkedAt     string         `json:"benchmarked_at"`
+	Capabilities      map[string]any `json:"capabilities,omitempty"`
+}
+
 type ModelFilter struct {
 	ProviderID    string
 	IsFree        *bool
@@ -682,22 +730,23 @@ type Benchmark struct {
 	BenchmarkedAt string   `db:"benchmarked_at" json:"benchmarked_at"`
 }
 
-type ValidatedModel struct {
-	ID                string   `db:"id" json:"id"`
-	ProviderID        string   `db:"provider_id" json:"provider_id"`
-	Name              string   `db:"name" json:"name"`
-	ContextWindow     *int     `db:"context_window" json:"context_window,omitempty"`
-	MaxOutputTokens   *int     `db:"max_output_tokens" json:"max_output_tokens,omitempty"`
-	SupportsTools     bool     `db:"supports_tools" json:"supports_tools"`
-	SupportsVision    bool     `db:"supports_vision" json:"supports_vision"`
-	SupportsReasoning bool     `db:"supports_reasoning" json:"supports_reasoning"`
-	IsFree            bool     `db:"is_free" json:"is_free"`
-	FreeConfirmed     bool     `db:"free_confirmed" json:"free_confirmed"`
-	SpeedClass        string   `db:"speed_class" json:"speed_class"`
-	TTFTMs            *int     `db:"ttft_ms" json:"ttft_ms,omitempty"`
-	TPS               *float64 `db:"tps" json:"tps,omitempty"`
-	ToolLatencyMs     *int     `db:"tool_latency_ms" json:"tool_latency_ms,omitempty"`
-	BenchmarkedAt     string   `db:"benchmarked_at" json:"benchmarked_at"`
+type ValidatedModelNamed struct {
+	ID                string   `db:"id"`
+	ProviderID        string   `db:"provider_id"`
+	Name              string   `db:"name"`
+	ContextWindow     *int     `db:"context_window"`
+	MaxOutputTokens   *int     `db:"max_output_tokens"`
+	SupportsTools     bool     `db:"supports_tools"`
+	SupportsVision    bool     `db:"supports_vision"`
+	SupportsReasoning bool     `db:"supports_reasoning"`
+	IsFree            bool     `db:"is_free"`
+	FreeConfirmed     bool     `db:"free_confirmed"`
+	SpeedClass        string   `db:"speed_class"`
+	TTFTMs            *int     `db:"ttft_ms"`
+	TPS               *float64 `db:"tps"`
+	ToolLatencyMs     *int     `db:"tool_latency_ms"`
+	BenchmarkedAt     string   `db:"benchmarked_at"`
+	Capabilities      string   `db:"capabilities"`
 }
 
 type Combo struct {
