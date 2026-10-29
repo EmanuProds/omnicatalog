@@ -54,10 +54,6 @@ func main() {
 		log.Logger = log.Output(os.Stderr)
 	}
 
-	log.Info().
-		Str("version", version).
-		Msg("Starting omnicatalog")
-
 	// Execute CLI command
 	rootCmd := cli.NewRootCommand(cfg, version, commit, buildDate)
 	if err := rootCmd.ExecuteContext(ctx); err != nil {

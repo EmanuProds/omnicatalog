@@ -173,7 +173,7 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 						}
 						modelItems := make([]SelectItem, 0, len(mods))
 						for _, m := range mods {
-							selM := true
+							selM := strings.HasSuffix(m.ID, ":free") || strings.Contains(strings.ToLower(m.ID), "free")
 							if len(preselectedModels) > 0 {
 								selM = preselectedModels[m.ID]
 							}
