@@ -196,7 +196,7 @@ prompt_config() {
 
     # Config directory is FIXED
     CONFIG_DIR="$DEFAULT_CONFIG_DIR"
-    log_info "Config directory: $CONFIG_DIR (fixed)"
+    log_info "Config directory: $CONFIG_DIR"
 
     # OmniRoute URL
     read -p "OmniRoute base URL [http://localhost:20128]: " OMNIROUTE_URL
@@ -229,16 +229,15 @@ prompt_config() {
 
     # Data directory is FIXED
     DATA_DIR="$DEFAULT_DATA_DIR"
-    log_info "Data directory: $DATA_DIR (fixed)"
+    log_info "Data directory: $DATA_DIR"
 
     # Log file path is FIXED
     LOG_FILE="/var/log/omnicatalog.log"
-    log_info "Log file: $LOG_FILE (fixed)"
+    log_info "Log file: $LOG_FILE"
 
-    # User to run service
-    echo
-    read -p "System user to run service [$(logname)]: " SERVICE_USER
-    SERVICE_USER=${SERVICE_USER:-$(logname)}
+    # User to run service (default to current user)
+    SERVICE_USER="${SUDO_USER:-$(whoami)}"
+    log_info "Service user: $SERVICE_USER"
 
     # Confirm
     echo
@@ -246,9 +245,9 @@ prompt_config() {
     echo "  OmniRoute URL: $OMNIROUTE_URL"
     echo "  API Key: ${API_KEY:-[not set, will use env/file]}"
     echo "  Schedule: $SCHEDULE${CUSTOM_CRON:+ (custom: $CUSTOM_CRON)}"
-    echo "  Config dir: $CONFIG_DIR (fixed)"
-    echo "  Data dir: $DATA_DIR (fixed)"
-    echo "  Log file: $LOG_FILE (fixed)"
+    echo "  Config dir: $CONFIG_DIR"
+    echo "  Data dir: $DATA_DIR"
+    echo "  Log file: $LOG_FILE"
     echo "  Service user: $SERVICE_USER"
     echo
     read -p "Proceed with installation? [y/N]: " CONFIRM
@@ -265,7 +264,9 @@ create_directories() {
     mkdir -p "$CONFIG_DIR"
     mkdir -p "$DATA_DIR"
     mkdir -p "$(dirname "$LOG_FILE")"
-    chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" "$DATA_DIR" "$(dirname "$LOG_FILE")"
+    touch "$LOG_FILE"
+    chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" "$DATA_DIR"
+    chown "$SERVICE_USER:$SERVICE_USER" "$LOG_FILE"
 }
 
 # Generate config.yaml
@@ -274,7 +275,7 @@ generate_config() {
     cat > "$CONFIG_DIR/config.yaml" <<EOF
 omniroute:
   base_url: "$OMNIROUTE_URL"
-  api_key: "${API_KEY:-\{env:OMNIROUTE_API_KEY\}}"
+  api_key: "${API_KEY:-{env:OMNIROUTE_API_KEY}}"
   timeout: 30s
 
 opencode:
@@ -362,9 +363,8 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=omnicatalog
 
-# Resource limits (minimum RAM)
-MemoryLimit=256M
-MemorySwapMax=0
+# Resource limits (MemoryMax replaces deprecated MemoryLimit)
+MemoryMax=256M
 CPUQuota=50%
 
 # Security
@@ -432,6 +432,14 @@ main() {
     else
         log_info "OmniCatalog Installer"
         check_root
+        # Resolve the invoking user's home when run via sudo
+        if [[ -n "${SUDO_USER:-}" ]]; then
+            SUDO_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6) || true
+            if [[ -n "$SUDO_HOME" ]]; then
+                DEFAULT_CONFIG_DIR="$SUDO_HOME/.config/omnicatalog"
+                DEFAULT_DATA_DIR="$SUDO_HOME/.local/share/omnicatalog"
+            fi
+        fi
         check_binary
         prompt_config
         create_directories
