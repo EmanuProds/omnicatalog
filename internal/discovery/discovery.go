@@ -222,10 +222,6 @@ func (d *Discovery) GetModelsForFreeValidation(ctx context.Context) ([]store.Mod
 			selected = append(selected, m)
 		}
 	}
-	log.Warn().Int("freeCandidates", len(models)).Int("selected", len(selected)).Bool("allModels", d.allModels).Int("map", len(d.selectedModels)).Msg("debug free getter")
-	for k := range d.selectedModels {
-		log.Warn().Str("key", k).Msg("selected key")
-	}
 	return selected, nil
 }
 
