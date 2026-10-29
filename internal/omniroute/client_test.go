@@ -86,10 +86,10 @@ func TestClient_GetModels(t *testing.T) {
 					ID:              "anthropic/claude-sonnet-4-6",
 					Object:          "model",
 					OwnedBy:         "anthropic",
-					ContextWindow:   1000000,
+					ContextLength:   1000000,
 					MaxOutputTokens: 8192,
-					SupportsTools:   true,
-					SupportsVision:  true,
+					
+					
 					Pricing: &ModelPricing{
 						Input:  0,
 						Output: 0,
@@ -103,9 +103,9 @@ func TestClient_GetModels(t *testing.T) {
 					ID:              "groq/llama-3.1-70b",
 					Object:          "model",
 					OwnedBy:         "groq",
-					ContextWindow:   131072,
+					ContextLength:   131072,
 					MaxOutputTokens: 8192,
-					SupportsTools:   true,
+					
 					Pricing: &ModelPricing{
 						Input:  0,
 						Output: 0,
@@ -142,7 +142,7 @@ func TestClient_GetModels(t *testing.T) {
 	if models[0].ID != "anthropic/claude-sonnet-4-6" || models[1].ID != "groq/llama-3.1-70b" {
 		t.Errorf("unexpected model IDs: %v", models)
 	}
-	if !models[0].SupportsTools || !models[1].SupportsTools {
+	if !models[0].SupportsTools() || !models[1].SupportsTools() {
 		t.Errorf("expected both models to support tools")
 	}
 }
@@ -170,9 +170,9 @@ func TestClient_QueryModels(t *testing.T) {
 					ID:              "anthropic/claude-sonnet-4-6",
 					Object:          "model",
 					OwnedBy:         "anthropic",
-					ContextWindow:   1000000,
+					ContextLength:   1000000,
 					MaxOutputTokens: 8192,
-					SupportsTools:   true,
+					
 				},
 			},
 		}

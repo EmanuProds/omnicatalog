@@ -774,3 +774,21 @@ type SchedulerRun struct {
 	StartedAt    string  `db:"started_at" json:"started_at"`
 	CompletedAt  *string `db:"completed_at" json:"completed_at,omitempty"`
 }
+// Settings (app-level key/value)
+func (s *Store) SetSetting(key, value string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO app_settings (key, value, updated_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
+	`, key, value)
+	return err
+}
+
+func (s *Store) GetSetting(key string) (string, error) {
+	var value string
+	err := s.db.Get(&value, "SELECT value FROM app_settings WHERE key = ?", key)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return value, err
+}

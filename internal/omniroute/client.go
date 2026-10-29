@@ -193,7 +193,17 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body any) (
 	return resp, nil
 }
 
-// GetProviders lists configured providers
+// providerConnection is a single OmniRoute provider connection
+type providerConnection struct {
+	ID                 string         `json:"id"`
+	Provider           string         `json:"provider"`
+	Name               string         `json:"name"`
+	IsActive           bool           `json:"isActive"`
+	TestStatus         string         `json:"testStatus"`
+	ProviderSpecificData map[string]any `json:"providerSpecificData"`
+}
+
+// GetProviders lists configured providers, aggregated by provider slug
 func (c *Client) GetProviders(ctx context.Context) ([]Provider, error) {
 	resp, err := c.doRequest(ctx, http.MethodGet, "/api/providers", nil)
 	if err != nil {
@@ -207,14 +217,67 @@ func (c *Client) GetProviders(ctx context.Context) ([]Provider, error) {
 	}
 
 	var result struct {
-		Object string     `json:"object"`
-		Data   []Provider `json:"data"`
+		Object      string               `json:"object"`
+		Data        []Provider           `json:"data"`
+		Connections []providerConnection `json:"connections"`
+		Total       int                  `json:"total"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode providers response: %w", err)
 	}
 
-	return result.Data, nil
+	// Direct (legacy) shape
+	if len(result.Connections) == 0 {
+		return result.Data, nil
+	}
+
+	// Aggregate connections by provider slug
+	by := make(map[string]*Provider)
+	order := make([]string, 0)
+	for _, conn := range result.Connections {
+		slug := conn.Provider
+		if slug == "" {
+			slug = conn.ID
+		}
+		if slug == "" {
+			continue
+		}
+		p, ok := by[slug]
+		if !ok {
+			name := conn.Name
+			if name == "" {
+				name = slug
+			}
+			p = &Provider{
+				ID:       slug,
+				Name:     name,
+				Status:   "disconnected",
+				FreeTier: true,
+				Metadata: map[string]any{"connections": []string{}},
+			}
+			by[slug] = p
+			order = append(order, slug)
+		}
+		if conn.IsActive {
+			p.Status = "connected"
+		}
+		if p.Name == slug && conn.Name != "" {
+			p.Name = conn.Name
+		}
+		// connections that do not exclusively import free models make provider not guaranteed free
+		if v, ok := conn.ProviderSpecificData["importFreeModelsOnly"].(bool); ok && !v {
+			p.FreeTier = false
+		}
+		conns := p.Metadata["connections"].([]string)
+		conns = append(conns, conn.ID)
+		p.Metadata["connections"] = conns
+	}
+
+	providers := make([]Provider, 0, len(order))
+	for _, slug := range order {
+		providers = append(providers, *by[slug])
+	}
+	return providers, nil
 }
 
 // GetModels lists all available models

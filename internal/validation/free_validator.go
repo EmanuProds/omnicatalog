@@ -62,7 +62,7 @@ func (v *FreeValidator) ValidateFreeTier(ctx context.Context) error {
 
 	log.Info().Int("providers", len(modelsByProvider)).Msg("Grouped by provider")
 
-	// Validate each provider sequentially within 30s window, but providers in parallel
+	// Validate providers in parallel; models within a provider sequentially (15s each)
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(modelsByProvider))
 
@@ -75,7 +75,6 @@ func (v *FreeValidator) ValidateFreeTier(ctx context.Context) error {
 			v.semaphore <- struct{}{}
 			defer func() { <-v.semaphore }()
 
-			// Validate all models from this provider within 30s window
 			if err := v.validateProviderModels(ctx, pID, pModels); err != nil {
 				errChan <- fmt.Errorf("provider %s: %w", pID, err)
 			}
@@ -100,19 +99,10 @@ func (v *FreeValidator) ValidateFreeTier(ctx context.Context) error {
 	return nil
 }
 
-// validateProviderModels validates all models from a single provider within the time window
+// validateProviderModels validates all models from a single provider sequentially (15s per model)
 func (v *FreeValidator) validateProviderModels(ctx context.Context, providerID string, models []store.Model) error {
 	log.Info().Str("provider", providerID).Int("models", len(models)).Msg("Validating free tier for provider")
 
-	// Create a context with timeout for this provider's window
-	windowSec := v.config.FreeVal.WindowPerProviderSec
-	if windowSec <= 0 {
-		windowSec = 30
-	}
-	providerCtx, cancel := context.WithTimeout(ctx, time.Duration(windowSec)*time.Second)
-	defer cancel()
-
-	// Check if provider is known to be free (cached)
 	provider, err := v.store.GetProvider(providerID)
 	if err != nil {
 		return fmt.Errorf("failed to get provider: %w", err)
@@ -123,22 +113,42 @@ func (v *FreeValidator) validateProviderModels(ctx context.Context, providerID s
 		return v.markModelsFreeConfirmed(ctx, models, true)
 	}
 
-	// Test each model sequentially within the window
 	for i, model := range models {
-		select {
-		case <-providerCtx.Done():
-			log.Warn().Str("provider", providerID).Msg("Provider validation window expired")
-			return fmt.Errorf("provider validation window expired")
-		default:
+		modelTimeout := 15 * time.Second
+		if v.config.Validation.APIToolCallTimeout > 0 && v.config.Validation.APIToolCallTimeout < modelTimeout {
+			modelTimeout = v.config.Validation.APIToolCallTimeout
 		}
 
 		log.Debug().Str("provider", providerID).Str("model", model.ID).Int("index", i+1).Msg("Testing model free tier")
 
-		isFree, err := v.testModelFreeTier(providerCtx, model.ID)
-		if err != nil {
-			log.Error().Err(err).Str("model", model.ID).Msg("Free tier test failed")
-			// Mark as not free but don't fail the whole provider
-			v.updateModelFreeStatus(ctx, &model, false, err.Error())
+		modelCtx, cancel := context.WithTimeout(ctx, modelTimeout)
+		var isFree bool
+		var testErr error
+		// retry transient failures up to 3 times
+		for attempt := 0; attempt < 3; attempt++ {
+			isFree, testErr = v.testModelFreeTier(modelCtx, model.ID)
+			if testErr == nil {
+				break
+			}
+			if !isTransientError(testErr) {
+				break
+			}
+			log.Warn().Err(testErr).Str("model", model.ID).Int("attempt", attempt+1).Msg("Transient free-tier failure, retrying")
+			select {
+			case <-time.After(time.Duration(attempt+1) * time.Second):
+			case <-modelCtx.Done():
+				break
+			}
+		}
+		cancel()
+
+		if testErr != nil {
+			if isTransientError(testErr) {
+				log.Warn().Err(testErr).Str("model", model.ID).Msg("Free tier test skipped due to transient error (cooldown/timeout)")
+				continue
+			}
+			log.Error().Err(testErr).Str("model", model.ID).Msg("Free tier test failed")
+			v.updateModelFreeStatus(ctx, &model, false, testErr.Error())
 			continue
 		}
 

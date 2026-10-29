@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -61,6 +62,7 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			onlyNew, _ := cmd.Flags().GetBool("only-new")
 			forceRevalidate, _ := cmd.Flags().GetBool("force-revalidate")
+			testAll, _ := cmd.Flags().GetBool("all")
 			
 			log.Info().
 				Bool("dry_run", dryRun).
@@ -89,6 +91,123 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 			log.Info().Msg("Phase 1: Discovery")
 			if err := discoverySvc.SyncAll(ctx); err != nil {
 				return fmt.Errorf("discovery phase failed: %w", err)
+			}
+
+			// Interactive provider/model selection (TTY only unless --all)
+			if !testAll && termIsTerminal(os.Stdin) && termIsTerminal(os.Stdout) {
+				log.Info().Msg("Please select providers and models to test")
+				providers, err := storeInstance.GetProviders()
+				if err != nil {
+					return fmt.Errorf("failed to get providers: %w", err)
+				}
+
+				// Preselect from saved settings
+				preselectedProviders := map[string]bool{}
+				preselectedModels := map[string]bool{}
+				if saved, err := storeInstance.GetSetting("selected_providers"); err == nil && saved != "" {
+					var slugs []string
+					if json.Unmarshal([]byte(saved), &slugs) == nil {
+						for _, sl := range slugs {
+							preselectedProviders[sl] = true
+						}
+					}
+				}
+				if savedM, err := storeInstance.GetSetting("selected_models"); err == nil && savedM != "" {
+					var ids []string
+					if json.Unmarshal([]byte(savedM), &ids) == nil {
+						for _, id := range ids {
+							preselectedModels[id] = true
+						}
+					}
+				}
+
+				// Build provider list with candidate model counts
+				providerItems := make([]SelectItem, 0, len(providers))
+				providerModelMap := make(map[string][]store.Model)
+				for _, p := range providers {
+					mods, _ := storeInstance.GetModels(store.ModelFilter{ProviderID: p.ID, SupportsTools: boolPtr(true)})
+					var cand []store.Model
+					for _, m := range mods {
+						if m.ContextWindow != nil && *m.ContextWindow >= cfg.ContextVal.TestTokens {
+							cand = append(cand, m)
+						}
+					}
+					providerModelMap[p.ID] = cand
+					if len(cand) == 0 {
+						continue
+					}
+					sel := true
+					if len(preselectedProviders) > 0 {
+						sel = preselectedProviders[p.ID]
+					}
+					providerItems = append(providerItems, SelectItem{
+						ID: p.ID, Label: fmt.Sprintf("%s (%d models)", p.Name, len(cand)), Selected: sel,
+					})
+				}
+
+				selProviders, err := Multiselect("Select providers to test", providerItems)
+				if err != nil {
+					log.Warn().Err(err).Msg("Selection cancelled, testing all providers")
+					testAll = true
+				} else {
+					var selectedProviderSlugs []string
+					for _, it := range selProviders {
+						if it.Selected {
+							selectedProviderSlugs = append(selectedProviderSlugs, it.ID)
+						}
+					}
+
+					// Model selection per provider
+					var selectedModelIDs []string
+					for _, slug := range selectedProviderSlugs {
+						mods := providerModelMap[slug]
+						if len(mods) == 0 {
+							continue
+						}
+						modelItems := make([]SelectItem, 0, len(mods))
+						for _, m := range mods {
+							selM := true
+							if len(preselectedModels) > 0 {
+								selM = preselectedModels[m.ID]
+							}
+							ctxStr := "?"
+							if m.ContextWindow != nil {
+								ctxStr = formatTokens(*m.ContextWindow)
+							}
+							modelItems = append(modelItems, SelectItem{
+								ID: m.ID, Label: fmt.Sprintf("%s (ctx %s)", m.ID, ctxStr), Selected: selM,
+							})
+						}
+						selModels, err := Multiselect(fmt.Sprintf("Select models for %s", slug), modelItems)
+						if err != nil {
+							// on cancel, select all for this provider
+							for _, m := range mods {
+								selectedModelIDs = append(selectedModelIDs, m.ID)
+							}
+							continue
+						}
+						for _, it := range selModels {
+							if it.Selected {
+								selectedModelIDs = append(selectedModelIDs, it.ID)
+							}
+						}
+					}
+
+					// Persist selection
+					bp, _ := json.Marshal(selectedProviderSlugs)
+					bm, _ := json.Marshal(selectedModelIDs)
+					_ = storeInstance.SetSetting("selected_providers", string(bp))
+					_ = storeInstance.SetSetting("selected_models", string(bm))
+
+					// Apply to discovery
+					discoverySvc.SetSelectedModels(selectedModelIDs)
+					log.Info().Int("providers", len(selectedProviderSlugs)).Int("models", len(selectedModelIDs)).Msg("Selection applied")
+				}
+			}
+
+			if testAll {
+				// clear selection filter -> all models
+				discoverySvc.SetSelectedModels(nil)
 			}
 
 			// Phase 2: Free tier validation
@@ -131,6 +250,7 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 	}
 	cmd.Flags().Bool("only-new", false, "Validate only new/untested models")
 	cmd.Flags().Bool("force-revalidate", false, "Force revalidation of all models")
+	cmd.Flags().Bool("all", false, "Test all providers and models without interactive selection")
 	return cmd
 }
 
@@ -568,3 +688,5 @@ func formatTokens(n int) string {
 	}
 	return fmt.Sprintf("%d", n)
 }
+
+func boolPtr(b bool) *bool { return &b }

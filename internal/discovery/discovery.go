@@ -14,18 +14,44 @@ import (
 
 // Discovery handles model discovery and synchronization
 type Discovery struct {
-	client *omniroute.Client
-	store  *store.Store
-	config *config.Config
+	client          *omniroute.Client
+	store           *store.Store
+	config          *config.Config
+	selectedModels  map[string]bool
+	allModels       bool
 }
 
 // NewDiscovery creates a new discovery service
 func NewDiscovery(cfg *config.Config, store *store.Store) *Discovery {
 	return &Discovery{
-		client: omniroute.NewClient(cfg),
-		store:  store,
-		config: cfg,
+		client:         omniroute.NewClient(cfg),
+		store:          store,
+		config:         cfg,
+		selectedModels: nil,
+		allModels:      true,
 	}
+}
+
+// SetSelectedModels restricts discovery getters to the given model IDs.
+// Pass nil/empty to test all models.
+func (d *Discovery) SetSelectedModels(ids []string) {
+	if len(ids) == 0 {
+		d.selectedModels = nil
+		d.allModels = true
+		return
+	}
+	d.selectedModels = make(map[string]bool, len(ids))
+	for _, id := range ids {
+		d.selectedModels[id] = true
+	}
+	d.allModels = false
+}
+
+func (d *Discovery) isModelSelected(id string) bool {
+	if d.allModels || len(d.selectedModels) == 0 {
+		return true
+	}
+	return d.selectedModels[id]
 }
 
 // SyncProviders discovers and syncs providers from OmniRoute
@@ -200,6 +226,15 @@ func (d *Discovery) GetModelsForToolCallingValidation(ctx context.Context) ([]st
 		return nil, err
 	}
 
+	// Apply interactive selection filter
+	var selected []store.Model
+	for _, m := range models {
+		if d.isModelSelected(m.ID) {
+			selected = append(selected, m)
+		}
+	}
+	models = selected
+
 	// Filter out models that already have recent validation
 	var needsValidation []store.Model
 	for _, m := range models {
@@ -228,6 +263,9 @@ func (d *Discovery) GetModelsForContextValidation(ctx context.Context) ([]store.
 	// Filter models that have speed benchmark but no context validation
 	var needsValidation []store.Model
 	for _, v := range validated {
+		if !d.isModelSelected(v.ID) {
+			continue
+		}
 		if v.ContextWindow != nil && *v.ContextWindow >= d.config.ContextVal.TestTokens {
 			// Check if context validation exists in validations table
 			// For now, include all that meet minimum context
@@ -250,6 +288,9 @@ func (d *Discovery) GetModelsForBenchmark(ctx context.Context) ([]store.Model, e
 
 	var needsBenchmark []store.Model
 	for _, v := range validated {
+		if !d.isModelSelected(v.ID) {
+			continue
+		}
 		// Check if already benchmarked
 		benchmark, err := d.store.GetBenchmark(v.ID)
 		if err == nil && benchmark != nil {

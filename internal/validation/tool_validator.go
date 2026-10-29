@@ -55,21 +55,34 @@ func (v *ToolValidator) ValidateToolCalling(ctx context.Context) error {
 
 	log.Info().Int("count", len(models)).Msg("Models need tool calling validation")
 
+	byProvider := groupByProvider(models)
+
+	// provider-level concurrency
+	maxProv := v.config.FreeVal.MaxConcurrentProviders
+	if maxProv <= 0 {
+		maxProv = v.config.Validation.MaxConcurrentTests
+	}
+	if maxProv <= 0 {
+		maxProv = 5
+	}
+	provSem := make(chan struct{}, maxProv)
+
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(models))
 
-	for _, model := range models {
+	for providerID, providerModels := range byProvider {
 		wg.Add(1)
-		go func(m store.Model) {
+		go func(pID string, pModels []store.Model) {
 			defer wg.Done()
+			provSem <- struct{}{}
+			defer func() { <-provSem }()
 
-			v.semaphore <- struct{}{}
-			defer func() { <-v.semaphore }()
-
-			if err := v.validateModelToolCalling(ctx, m); err != nil {
-				errChan <- fmt.Errorf("model %s: %w", m.ID, err)
+			for _, model := range pModels {
+				if err := v.validateModelToolCalling(ctx, model); err != nil {
+					errChan <- fmt.Errorf("model %s: %w", model.ID, err)
+				}
 			}
-		}(model)
+		}(providerID, providerModels)
 	}
 
 	wg.Wait()
@@ -137,8 +150,23 @@ func (v *ToolValidator) testAPIToolCalling(ctx context.Context, modelID string) 
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, apiTimeout)
 	defer cancel()
 
-	// Use the existing client method for tool calling test
-	return v.client.TestModelToolCalling(ctxWithTimeout, modelID)
+	// Retry transient failures (rate limit, cooldown, timeout) up to 3 times
+	for attempt := 0; attempt < 3; attempt++ {
+		ok, err := v.client.TestModelToolCalling(ctxWithTimeout, modelID)
+		if err == nil {
+			return ok, nil
+		}
+		if !isTransientError(err) || attempt == 2 {
+			return ok, err
+		}
+		log.Warn().Err(err).Str("model", modelID).Int("attempt", attempt+1).Msg("Transient API tool-call failure, retrying")
+		select {
+		case <-time.After(time.Duration(attempt+1) * time.Second):
+		case <-ctxWithTimeout.Done():
+			return ok, err
+		}
+	}
+	return false, nil
 }
 
 // testOpenCodeToolCalling runs the real OpenCode test with tool calling

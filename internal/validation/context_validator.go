@@ -54,21 +54,28 @@ func (v *ContextValidator) ValidateContext(ctx context.Context) error {
 
 	log.Info().Int("count", len(models)).Msg("Models need context validation")
 
+	byProvider := groupByProvider(models)
+
+	maxProv := v.config.FreeVal.MaxConcurrentProviders
+	if maxProv <= 0 { maxProv = 5 }
+	provSem := make(chan struct{}, maxProv)
+
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(models))
 
-	for _, model := range models {
+	for providerID, providerModels := range byProvider {
 		wg.Add(1)
-		go func(m store.Model) {
+		go func(pID string, pModels []store.Model) {
 			defer wg.Done()
+			provSem <- struct{}{}
+			defer func() { <-provSem }()
 
-			v.semaphore <- struct{}{}
-			defer func() { <-v.semaphore }()
-
-			if err := v.validateModelContext(ctx, m); err != nil {
-				errChan <- fmt.Errorf("model %s: %w", m.ID, err)
+			for _, model := range pModels {
+				if err := v.validateModelContext(ctx, model); err != nil {
+					errChan <- fmt.Errorf("model %s: %w", model.ID, err)
+				}
 			}
-		}(model)
+		}(providerID, providerModels)
 	}
 
 	wg.Wait()
@@ -90,6 +97,9 @@ func (v *ContextValidator) ValidateContext(ctx context.Context) error {
 
 // validateModelContext tests the actual max context for a model
 func (v *ContextValidator) validateModelContext(ctx context.Context, model store.Model) error {
+	modelCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	ctx = modelCtx
 	log.Debug().Str("model", model.ID).Msg("Starting context validation")
 
 	// Test with a request near the model's reported context window

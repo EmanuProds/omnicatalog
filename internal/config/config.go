@@ -164,8 +164,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("opencode.backup_before_update", true)
 
 	// Validation
-	v.SetDefault("validation.api_tool_call_timeout", "30s")
-	v.SetDefault("validation.opencode_test_timeout", "60s")
+	v.SetDefault("validation.api_tool_call_timeout", "15s")
+	v.SetDefault("validation.opencode_test_timeout", "15s")
 	v.SetDefault("validation.max_concurrent_tests", 3)
 	v.SetDefault("validation.revalidate_after_hours", 24)
 
@@ -189,7 +189,7 @@ func setDefaults(v *viper.Viper) {
 
 	// Free Validation
 	v.SetDefault("free_validation.enabled", true)
-	v.SetDefault("free_validation.window_per_provider_sec", 30)
+	v.SetDefault("free_validation.window_per_provider_sec", 15)
 	v.SetDefault("free_validation.max_concurrent_providers", 5)
 	v.SetDefault("free_validation.test_method", "billing_check")
 	v.SetDefault("free_validation.cache_ttl_hours", 24)
