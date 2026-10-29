@@ -222,6 +222,10 @@ func (d *Discovery) GetModelsForFreeValidation(ctx context.Context) ([]store.Mod
 			selected = append(selected, m)
 		}
 	}
+	log.Warn().Int("freeCandidates", len(models)).Int("selected", len(selected)).Bool("allModels", d.allModels).Int("map", len(d.selectedModels)).Msg("debug free getter")
+	for k := range d.selectedModels {
+		log.Warn().Str("key", k).Msg("selected key")
+	}
 	return selected, nil
 }
 
@@ -263,53 +267,55 @@ func (d *Discovery) GetModelsForToolCallingValidation(ctx context.Context) ([]st
 	return needsValidation, nil
 }
 
-// GetModelsForContextValidation returns models that passed tool calling validation but need context validation
+// GetModelsForContextValidation returns models that passed free/tool validation but need context validation
 func (d *Discovery) GetModelsForContextValidation(ctx context.Context) ([]store.Model, error) {
-	validated, err := d.store.GetValidatedModels(0)
+	filter := store.ModelFilter{
+		FreeConfirmed: boolPtr(true),
+		SupportsTools: boolPtr(true),
+	}
+	models, err := d.store.GetModels(filter)
 	if err != nil {
 		return nil, err
 	}
 
-	// Filter models that have speed benchmark but no context validation
 	var needsValidation []store.Model
-	for _, v := range validated {
-		if !d.isModelSelected(v.ID) {
+	for _, m := range models {
+		if !d.isModelSelected(m.ID) {
 			continue
 		}
-		if v.ContextWindow != nil && *v.ContextWindow >= d.config.ContextVal.TestTokens {
-			// Check if context validation exists in validations table
-			// For now, include all that meet minimum context
-			model, err := d.store.GetModel(v.ID)
-			if err == nil && model != nil {
-				needsValidation = append(needsValidation, *model)
-			}
+		if m.ContextWindow == nil || *m.ContextWindow < d.config.ContextVal.TestTokens {
+			continue
 		}
+		needsValidation = append(needsValidation, m)
 	}
-
 	return needsValidation, nil
 }
 
-// GetModelsForBenchmark returns models that passed all validations and need speed benchmark
+// GetModelsForBenchmark returns models that passed free/tool validation and need speed benchmark
 func (d *Discovery) GetModelsForBenchmark(ctx context.Context) ([]store.Model, error) {
-	validated, err := d.store.GetValidatedModels(0)
+	filter := store.ModelFilter{
+		FreeConfirmed: boolPtr(true),
+		SupportsTools: boolPtr(true),
+	}
+	models, err := d.store.GetModels(filter)
 	if err != nil {
 		return nil, err
 	}
 
 	var needsBenchmark []store.Model
-	for _, v := range validated {
-		if !d.isModelSelected(v.ID) {
+	for _, m := range models {
+		if !d.isModelSelected(m.ID) {
+			continue
+		}
+		if m.ContextWindow == nil || *m.ContextWindow < d.config.ContextVal.TestTokens {
 			continue
 		}
 		// Check if already benchmarked
-		benchmark, err := d.store.GetBenchmark(v.ID)
+		benchmark, err := d.store.GetBenchmark(m.ID)
 		if err == nil && benchmark != nil {
 			continue // Already benchmarked
 		}
-		model, err := d.store.GetModel(v.ID)
-		if err == nil && model != nil {
-			needsBenchmark = append(needsBenchmark, *model)
-		}
+		needsBenchmark = append(needsBenchmark, m)
 	}
 
 	return needsBenchmark, nil
