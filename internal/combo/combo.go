@@ -380,6 +380,21 @@ func (m *ComboManager) generateOpenCodeConfig(ctx context.Context) error {
 	}
 
 	// Build full config
+	// Also build provider.omniroute.models for combo references
+	models := make(map[string]any)
+	for _, comboID := range comboOrder {
+		for _, c := range combos {
+			if c.ID == comboID && c.Enabled {
+				models[comboID] = map[string]any{
+					"name":     c.Description,
+					"provider": "omniroute",
+					"model":    "omniroute/" + comboID,
+				}
+				break
+			}
+		}
+	}
+
 	config := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
 		"provider": map[string]any{
@@ -390,6 +405,7 @@ func (m *ComboManager) generateOpenCodeConfig(ctx context.Context) error {
 					"refreshOnList": true,
 					"modelCacheTtl": 300000,
 				},
+				"models": models,
 			},
 		},
 		"agents": agents,
@@ -435,12 +451,38 @@ func mergeConfigs(existing, newConfig map[string]any) map[string]any {
 		result[k] = v
 	}
 
-	// Override agents and provider.omniroute
+	// Override agents
 	if newAgents, ok := newConfig["agents"].(map[string]any); ok {
 		result["agents"] = newAgents
 	}
+
+	// Merge provider.omniroute preserving models and other sub-keys
 	if newProvider, ok := newConfig["provider"].(map[string]any); ok {
-		result["provider"] = newProvider
+		if existingProvider, ok := result["provider"].(map[string]any); ok {
+			// Merge omniroute specifically
+			if newOmni, ok := newProvider["omniroute"].(map[string]any); ok {
+				if existingOmni, ok := existingProvider["omniroute"].(map[string]any); ok {
+					// Deep merge omniroute
+					mergedOmni := make(map[string]any)
+					for k, v := range existingOmni {
+						mergedOmni[k] = v
+					}
+					for k, v := range newOmni {
+						if k == "models" {
+							// Keep existing models (we manage agents via agents key)
+						} else {
+							mergedOmni[k] = v
+						}
+					}
+					existingProvider["omniroute"] = mergedOmni
+				} else {
+					existingProvider["omniroute"] = newOmni
+				}
+			}
+			result["provider"] = existingProvider
+		} else {
+			result["provider"] = newProvider
+		}
 	}
 
 	return result
