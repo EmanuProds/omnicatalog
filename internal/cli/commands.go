@@ -248,6 +248,15 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 				return fmt.Errorf("combo update failed: %w", err)
 			}
 
+			// Final summary
+			fmt.Println()
+			fmt.Println("=== Managed Combos ===")
+			managed, _ := storeInstance.GetCombos()
+			for _, c := range managed {
+				fmt.Printf("  %s | %s ->%s\n", c.ID, c.Name, strings.Join(c.TargetModelIDs, ", "))
+			}
+			fmt.Printf("\n  opencode.json: %s\n", cfg.OpenCode.ConfigPath)
+
 			if dryRun {
 				log.Info().Msg("DRY-RUN: No changes would be saved")
 			}
