@@ -96,6 +96,7 @@ func Load() (*Config, error) {
 	setDefaults(v)
 
 	// Config file via env var (highest priority)
+	envConfigSet := false
 	if configFile := os.Getenv("OMNICATALOG_CONFIG"); configFile != "" {
 		expanded := expandPath(configFile)
 		if _, err := os.Stat(expanded); err == nil {
@@ -103,11 +104,13 @@ func Load() (*Config, error) {
 			if err := v.ReadInConfig(); err != nil {
 				return nil, fmt.Errorf("error reading config %s: %w", expanded, err)
 			}
+			envConfigSet = true
 		}
 	}
 
 	// Config file paths (priority order)
-	configPaths := []string{
+	if !envConfigSet {
+		configPaths := []string{
 		"/etc/omnicatalog/config.yaml",
 		"$HOME/.config/omnicatalog/config.yaml",
 		"./config.yaml",
@@ -123,6 +126,7 @@ func Load() (*Config, error) {
 			}
 			break
 		}
+	}
 	}
 
 	// Environment variables (prefix OMNICATALOG_)
@@ -222,6 +226,12 @@ func expandPath(path string) string {
 }
 
 func resolveSecret(value string) string {
+	if strings.HasPrefix(value, "{env:") && strings.HasSuffix(value, "}") {
+		varName := value[5 : len(value)-1]
+		if v := os.Getenv(varName); v != "" {
+			return v
+		}
+	}
 	if strings.HasPrefix(value, "{file:") && strings.HasSuffix(value, "}") {
 		path := expandPath(value[6 : len(value)-1])
 		if data, err := os.ReadFile(path); err == nil {
