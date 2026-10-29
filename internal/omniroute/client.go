@@ -30,20 +30,40 @@ type Provider struct {
 	LastChecked *time.Time             `json:"last_checked,omitempty"`
 }
 
-// Model represents an OmniRoute model
+// Model represents an OmniRoute model (matches API response)
 type Model struct {
-	ID                string         `json:"id"`
-	Object            string         `json:"object"`
-	Created           int64          `json:"created"`
-	OwnedBy           string         `json:"owned_by"`
-	ContextWindow     int            `json:"context_window"`
-	MaxOutputTokens   int            `json:"max_output_tokens"`
-	SupportsTools     bool           `json:"supports_tools"`
-	SupportsVision    bool           `json:"supports_vision"`
-	SupportsReasoning bool           `json:"supports_reasoning"`
-	Pricing           *ModelPricing  `json:"pricing,omitempty"`
+	ID                string            `json:"id"`
+	Object            string            `json:"object"`
+	Created           int64             `json:"created"`
+	OwnedBy           string            `json:"owned_by"`
+	ContextLength     int               `json:"context_length"`
+	MaxInputTokens    int               `json:"max_input_tokens"`
+	MaxOutputTokens   int               `json:"max_output_tokens"`
+	Pricing           *ModelPricing     `json:"pricing,omitempty"`
 	Capabilities      ModelCapabilities `json:"capabilities,omitempty"`
-	Description       string         `json:"description,omitempty"`
+	Description       string            `json:"description,omitempty"`
+	InputModalities   []string          `json:"input_modalities,omitempty"`
+	OutputModalities  []string          `json:"output_modalities,omitempty"`
+}
+
+// SupportsTools returns true if model supports tool calling
+func (m *Model) SupportsTools() bool {
+	return m.Capabilities.ToolCalling
+}
+
+// SupportsVision returns true if model supports vision
+func (m *Model) SupportsVision() bool {
+	return m.Capabilities.Vision
+}
+
+// SupportsReasoning returns true if model supports reasoning
+func (m *Model) SupportsReasoning() bool {
+	return m.Capabilities.Reasoning
+}
+
+// ContextWindow returns the context window (alias for ContextLength)
+func (m *Model) ContextWindow() int {
+	return m.ContextLength
 }
 
 // ModelPricing represents model pricing

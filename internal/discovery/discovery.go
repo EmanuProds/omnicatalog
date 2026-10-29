@@ -75,19 +75,23 @@ func (d *Discovery) SyncModels(ctx context.Context) error {
 	synced := 0
 	for _, m := range models {
 		// Apply initial filters
-		if !m.SupportsTools {
+		if !m.SupportsTools() {
 			log.Debug().Str("model", m.ID).Msg("Skipping model: no tool calling support")
 			continue
 		}
-		if m.ContextWindow < minContext {
-			log.Debug().Str("model", m.ID).Int("context", m.ContextWindow).Int("min", minContext).Msg("Skipping model: context too small")
+		if m.ContextWindow() < minContext {
+			log.Debug().Str("model", m.ID).Int("context", m.ContextWindow()).Int("min", minContext).Msg("Skipping model: context too small")
 			continue
 		}
 
 		// Determine if free based on pricing
+		// If pricing is null, treat as potential free (will be validated by free tier check)
+		// If pricing is explicitly 0, mark as free
 		isFree := false
-		if m.Pricing != nil && m.Pricing.Input == 0 && m.Pricing.Output == 0 {
-			isFree = true
+		if m.Pricing == nil {
+			isFree = true // Pricing unknown - candidate for free tier validation
+		} else if m.Pricing.Input == 0 && m.Pricing.Output == 0 {
+			isFree = true // Explicitly free
 		}
 
 		providerID := m.OwnedBy
@@ -101,6 +105,25 @@ func (d *Discovery) SyncModels(ctx context.Context) error {
 			}
 		}
 
+		// Ensure provider exists in database (auto-create if needed)
+		existingProvider, err := d.store.GetProvider(providerID)
+		if err != nil || existingProvider == nil {
+			now := time.Now().Format(time.RFC3339)
+			newProvider := &store.Provider{
+				ID:          providerID,
+				Name:        providerID,
+				Status:      "connected",
+				FreeTier:    isFree,
+				LastChecked: &now,
+				Metadata:    map[string]any{},
+			}
+			if err := d.store.UpsertProvider(newProvider); err != nil {
+				log.Error().Err(err).Str("provider", providerID).Msg("Failed to create provider")
+				continue
+			}
+			log.Debug().Str("provider", providerID).Msg("Auto-created provider")
+		}
+
 		pricingInput := 0.0
 		pricingOutput := 0.0
 		if m.Pricing != nil {
@@ -108,21 +131,23 @@ func (d *Discovery) SyncModels(ctx context.Context) error {
 			pricingOutput = m.Pricing.Output
 		}
 
+		ctxWindow := m.ContextWindow()
+		maxOutTokens := m.MaxOutputTokens
 		model := &store.Model{
 			ID:                m.ID,
 			ProviderID:        providerID,
 			Name:              m.OwnedBy + "/" + m.ID,
-			ContextWindow:     &m.ContextWindow,
-			MaxOutputTokens:   &m.MaxOutputTokens,
-			SupportsTools:     m.SupportsTools,
-			SupportsVision:    m.SupportsVision,
-			SupportsReasoning: m.SupportsReasoning,
+			ContextWindow:     &ctxWindow,
+			MaxOutputTokens:   &maxOutTokens,
+			SupportsTools:     m.SupportsTools(),
+			SupportsVision:    m.SupportsVision(),
+			SupportsReasoning: m.SupportsReasoning(),
 			PricingInput:      &pricingInput,
 			PricingOutput:     &pricingOutput,
 			IsFree:            isFree,
-			FreeConfirmed:     isFree, // Providers with explicit pricing=0 are considered confirmed free
+			FreeConfirmed:     false, // Will be confirmed by free tier validation
 			FreeTestedAt:      func() *string { if isFree { t := time.Now().Format(time.RFC3339); return &t } else { return nil } }(),
-			Capabilities:      map[string]any{"vision": m.SupportsVision, "tool_calling": m.SupportsTools, "reasoning": m.SupportsReasoning},
+			Capabilities:      map[string]any{"vision": m.SupportsVision(), "tool_calling": m.SupportsTools(), "reasoning": m.SupportsReasoning()},
 			DiscoveredAt:      time.Now().Format(time.RFC3339),
 		}
 
