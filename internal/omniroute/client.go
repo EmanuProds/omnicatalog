@@ -244,13 +244,9 @@ func (c *Client) GetProviders(ctx context.Context) ([]Provider, error) {
 		}
 		p, ok := by[slug]
 		if !ok {
-			name := conn.Name
-			if name == "" {
-				name = slug
-			}
 			p = &Provider{
 				ID:       slug,
-				Name:     name,
+				Name:     slug,
 				Status:   "disconnected",
 				FreeTier: true,
 				Metadata: map[string]any{"connections": []string{}},
@@ -260,9 +256,6 @@ func (c *Client) GetProviders(ctx context.Context) ([]Provider, error) {
 		}
 		if conn.IsActive {
 			p.Status = "connected"
-		}
-		if p.Name == slug && conn.Name != "" {
-			p.Name = conn.Name
 		}
 		// connections that do not exclusively import free models make provider not guaranteed free
 		if v, ok := conn.ProviderSpecificData["importFreeModelsOnly"].(bool); ok && !v {

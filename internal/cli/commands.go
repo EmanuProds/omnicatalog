@@ -149,7 +149,7 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 						sel = preselectedProviders[p.ID]
 					}
 					providerItems = append(providerItems, SelectItem{
-						ID: p.ID, Label: fmt.Sprintf("%s (%d models)", p.Name, len(cand)), Selected: sel,
+						ID: p.ID, Label: fmt.Sprintf("%s (%d models)", p.ID, len(cand)), Selected: sel,
 					})
 				}
 
