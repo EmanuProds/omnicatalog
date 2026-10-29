@@ -6,19 +6,18 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=emanuel
-Group=emanuel
-WorkingDirectory=/home/emanuel/Projetos/AI/omnicatalog
-ExecStart=/usr/local/bin/omnicatalog daemon --config /home/emanuel/.config/omnicatalog/config.yaml
+User=__SERVICE_USER__
+Group=__SERVICE_USER__
+WorkingDirectory=__WORKING_DIR__
+ExecStart=/usr/local/bin/omnicatalog daemon --config __CONFIG_DIR__/config.yaml
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=omnicatalog
 
-# Resource limits (minimum RAM)
-MemoryLimit=256M
-MemorySwapMax=0
+# Resource limits (MemoryMax replaces deprecated MemoryLimit)
+MemoryMax=256M
 CPUQuota=50%
 
 # Security
@@ -26,7 +25,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/emanuel/.local/share/omnicatalog /home/emanuel/.config/omnicatalog /var/log/omnicatalog.log
+ReadWritePaths=__CONFIG_DIR__ __DATA_DIR__ __LOG_DIR__
 
 [Install]
 WantedBy=multi-user.target

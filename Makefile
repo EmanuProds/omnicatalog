@@ -87,7 +87,13 @@ version: build
 install: build-prod
 	@echo "Installing $(BINARY_NAME)..."
 	@sudo cp $(BUILD_DIR)/$(BINARY_NAME) /usr/local/bin/
-	@sudo cp deploy/omnicatalog.service /etc/systemd/system/
+	@SERVICE_USER=$${SUDO_USER:-$$(whoami)}; \
+	 SUDO_HOME=$$(getent passwd "$$SERVICE_USER" | cut -d: -f6); \
+	 CONFIG_DIR="$$SUDO_HOME/.config/omnicatalog"; \
+	 DATA_DIR="$$SUDO_HOME/.local/share/omnicatalog"; \
+	 LOG_DIR="/var/log"; \
+	 WORKING_DIR="$$(pwd)"; \
+	 sudo bash -c 'cat deploy/omnicatalog.service | sed "s|__SERVICE_USER__|'$$SERVICE_USER'|g" | sed "s|__WORKING_DIR__|'$$WORKING_DIR'|g" | sed "s|__CONFIG_DIR__|'$$CONFIG_DIR'|g" | sed "s|__DATA_DIR__|'$$DATA_DIR'|g" | sed "s|__LOG_DIR__|'$$LOG_DIR'|g" > /etc/systemd/system/omnicatalog.service'
 	@sudo systemctl daemon-reload
 	@sudo systemctl enable --now omnicatalog
 	@echo "Installed and started as systemd service"
