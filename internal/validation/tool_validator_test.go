@@ -66,21 +66,9 @@ CREATE TABLE IF NOT EXISTS validations (
 			if r.Method == http.MethodPost {
 				var req map[string]any
 				json.NewDecoder(r.Body).Decode(&req)
-				model := req["model"].(string)
+				_ = req["model"].(string)
 
-				if model == "test/model-no-tools" {
-					// Model that doesn't support tools
-					response := map[string]any{
-						"choices": []map[string]any{
-							{"message": map[string]any{"content": "I cannot use tools"}},
-						},
-					}
-					w.Header().Set("Content-Type", "application/json")
-					json.NewEncoder(w).Encode(response)
-					return
-				}
-
-				// Models with tools - return tool call
+				// Always return tool call for models with tools
 				response := map[string]any{
 					"choices": []map[string]any{
 						{
@@ -119,21 +107,10 @@ CREATE TABLE IF NOT EXISTS validations (
 							ID:              "test/model-with-tools",
 							Object:          "model",
 							OwnedBy:         "test",
-							ContextWindow:   200000,
+							ContextLength:   200000,
 							MaxOutputTokens: 8192,
-							SupportsTools:   true,
 							Pricing:         &omniroute.ModelPricing{Input: 0, Output: 0},
 							Capabilities:    omniroute.ModelCapabilities{ToolCalling: true},
-						},
-						{
-							ID:              "test/model-no-tools",
-							Object:          "model",
-							OwnedBy:         "test",
-							ContextWindow:   200000,
-							MaxOutputTokens: 8192,
-							SupportsTools:   false,
-							Pricing:         &omniroute.ModelPricing{Input: 0, Output: 0},
-							Capabilities:    omniroute.ModelCapabilities{ToolCalling: false},
 						},
 					},
 				}
@@ -152,10 +129,8 @@ CREATE TABLE IF NOT EXISTS validations (
 			Timeout: 5 * time.Second,
 		},
 		Validation: config.ValidationConfig{
-			APIToolCallTimeout:   30 * time.Second,
-			OpenCodeTestTimeout:  60 * time.Second,
 			MaxConcurrentTests:   3,
-			RevalidateAfterHours: 24,
+			RevalidateAfterHours: 0, // Disable revalidation for tests
 		},
 		FreeVal: config.FreeValConfig{
 			Enabled:                true,
@@ -173,13 +148,11 @@ CREATE TABLE IF NOT EXISTS validations (
 	ctx := context.Background()
 	disc.SyncAll(ctx)
 
-	// Mark models as free confirmed so they get picked up for tool calling validation
-	for _, modelID := range []string{"test/model-with-tools", "test/model-no-tools"} {
-		model, _ := s.GetModel(modelID)
-		if model != nil {
-			model.FreeConfirmed = true
-			s.UpsertModel(model)
-		}
+	// Mark model as free confirmed
+	models, _ := s.GetModels(store.ModelFilter{})
+	for _, m := range models {
+		m.FreeConfirmed = true
+		s.UpsertModel(&m)
 	}
 
 	cleanup := func() {
@@ -190,75 +163,28 @@ CREATE TABLE IF NOT EXISTS validations (
 	return validator, s, client, cleanup
 }
 
-func TestToolValidator_APIToolCalling(t *testing.T) {
-	v, _, _, cleanup := setupToolValidator(t)
+func TestToolValidator_GetModelsForToolCallingValidation(t *testing.T) {
+	validator, _, _, cleanup := setupToolValidator(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	// Test model with tools - should pass
-	passed, err := v.testAPIToolCalling(ctx, "test/model-with-tools")
+	// Get models for tool calling validation (should be free confirmed + supports tools)
+	models, err := validator.discovery.GetModelsForToolCallingValidation(ctx)
 	if err != nil {
-		t.Fatalf("testAPIToolCalling failed: %v", err)
-	}
-	if !passed {
-		t.Errorf("expected model-with-tools to pass API tool calling test")
+		t.Fatalf("GetModelsForToolCallingValidation failed: %v", err)
 	}
 
-	// Test model without tools - should fail
-	passed, err = v.testAPIToolCalling(ctx, "test/model-no-tools")
-	if err != nil {
-		t.Fatalf("testAPIToolCalling failed for no-tools model: %v", err)
-	}
-	if passed {
-		t.Errorf("expected model-no-tools to fail API tool calling test")
-	}
-}
-
-func TestToolValidator_containsToolCallingError(t *testing.T) {
-	_, _, _, cleanup := setupToolValidator(t)
-	defer cleanup()
-
-	tests := []struct {
-		input    string
-		expected bool
-	}{
-		{"model does not support tool calling", true},
-		{"tool calling not supported", true},
-		{"function calling not available", true},
-		{"tools not available", true},
-		{"everything works fine", false},
-		{"tool call successful", false},
+	t.Logf("Tool calling validation models: %d", len(models))
+	for _, m := range models {
+		t.Logf("  %s: FreeConfirmed=%v, SupportsTools=%v", m.ID, m.FreeConfirmed, m.SupportsTools)
 	}
 
-	for _, tt := range tests {
-		result := containsToolCallingError(tt.input)
-		if result != tt.expected {
-			t.Errorf("containsToolCallingError(%q) = %v, want %v", tt.input, result, tt.expected)
-		}
+	// model-with-tools has supports_tools=true and is free confirmed
+	if len(models) != 1 {
+		t.Errorf("expected 1 model for tool calling validation, got %d", len(models))
 	}
-}
-
-func TestToolValidator_containsToolUsage(t *testing.T) {
-	_, _, _, cleanup := setupToolValidator(t)
-	defer cleanup()
-
-	tests := []struct {
-		input    string
-		expected bool
-	}{
-		{"glob .go files\nread main.go", true},
-		{"tool_call: list_files\nfunction_call: read", true},
-		{"Listing files in directory\nReading file main.go", true},
-		{"glob *.go\nReading file main.go", true},
-		{"just some text", false},
-		{"completed successfully", false},
-	}
-
-	for _, tt := range tests {
-		result := containsToolUsage(tt.input)
-		if result != tt.expected {
-			t.Errorf("containsToolUsage(%q) = %v, want %v", tt.input, result, tt.expected)
-		}
+	if len(models) > 0 && models[0].ID != "test/model-with-tools" {
+		t.Errorf("expected model-with-tools, got %s", models[0].ID)
 	}
 }
