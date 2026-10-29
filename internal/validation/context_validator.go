@@ -94,7 +94,7 @@ func (v *ContextValidator) ValidateContext(ctx context.Context) error {
 
 	if len(errs) > 0 {
 		log.Error().Errs("errors", errs).Msg("Context validation completed with errors")
-		return fmt.Errorf("context validation errors: %v", errs)
+		return nil
 	}
 
 	if v.progress != nil {

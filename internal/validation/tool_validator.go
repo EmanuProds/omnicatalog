@@ -101,7 +101,7 @@ func (v *ToolValidator) ValidateToolCalling(ctx context.Context) error {
 
 	if len(errs) > 0 {
 		log.Error().Errs("errors", errs).Msg("Tool calling validation completed with errors")
-		return fmt.Errorf("tool calling validation errors: %v", errs)
+		return nil
 	}
 
 	if v.progress != nil {

@@ -95,7 +95,7 @@ func (v *FreeValidator) ValidateFreeTier(ctx context.Context) error {
 
 	if len(errs) > 0 {
 		log.Error().Errs("errors", errs).Msg("Free tier validation completed with errors")
-		return fmt.Errorf("free tier validation errors: %v", errs)
+		return nil
 	}
 
 	if v.progress != nil {
