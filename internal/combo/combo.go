@@ -2,6 +2,7 @@ package combo
 
 import (
 	"context"
+	"regexp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -434,13 +435,27 @@ func (m *ComboManager) loadExistingConfig() map[string]any {
 		return nil
 	}
 
+	// Try strict JSON first
 	var config map[string]any
 	if err := json.Unmarshal(data, &config); err != nil {
-		log.Warn().Err(err).Msg("Failed to parse existing opencode.json")
-		return nil
+		// If strict JSON fails, try to fix common JSON5 issues (trailing commas)
+		fixed := fixJSON5(string(data))
+		if err := json.Unmarshal([]byte(fixed), &config); err != nil {
+			log.Warn().Err(err).Msg("Failed to parse existing opencode.json (even after fixing)")
+			return nil
+		}
+		log.Info().Msg("Parsed existing opencode.json after fixing trailing commas")
 	}
 
 	return config
+}
+
+// fixJSON5 attempts to fix common JSON5/JS issues to make it valid JSON
+func fixJSON5(s string) string {
+	// Remove trailing commas before } or ]
+	reTrailing := regexp.MustCompile(`,\s*([}\]])`)
+	s = reTrailing.ReplaceAllString(s, "$1")
+	return s
 }
 
 // mergeConfigs merges existing config with new agents config
