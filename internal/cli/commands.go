@@ -864,7 +864,7 @@ func runAutoSelection(cfg *config.Config) error {
 	discoverySvc.SetSelectedModels(selectedIDs)
 
 	// Run quick tool calling validation on selected models (bypass discovery filter)
-	fmt.Println("  Running quick API tool calling validation... [MARKER_AUTO_SELECT]")
+	fmt.Println("  Running quick API tool calling validation...")
 	toolValidator := validation.NewToolValidator(cfg, storeInstance, discoverySvc, client)
 	// Direct validation on selected models
 	for _, m := range candidates {
