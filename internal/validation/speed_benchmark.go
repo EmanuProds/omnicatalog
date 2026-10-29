@@ -106,6 +106,11 @@ func (s *SpeedBenchmark) RunBenchmarks(ctx context.Context) error {
 }
 
 // benchmarkModel runs all benchmark tests for a single model
+// BenchmarkModel runs speed benchmark on a specific model
+func (s *SpeedBenchmark) BenchmarkModel(ctx context.Context, model store.Model) error {
+	return s.benchmarkModel(ctx, model)
+}
+
 func (s *SpeedBenchmark) benchmarkModel(ctx context.Context, model store.Model) error {
 	modelCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

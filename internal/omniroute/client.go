@@ -160,7 +160,7 @@ func NewClient(cfg *config.Config) *Client {
 		baseURL: cfg.OmniRoute.BaseURL,
 		apiKey:  cfg.OmniRoute.APIKey,
 		httpClient: &http.Client{
-			Timeout: cfg.OmniRoute.Timeout,
+			// No global timeout; rely on context timeouts for per-request control
 		},
 	}
 }

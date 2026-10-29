@@ -179,7 +179,7 @@ func setDefaults(v *viper.Viper) {
 
 	// Context Validation
 	v.SetDefault("context_validation.enabled", true)
-	v.SetDefault("context_validation.test_tokens", 100000)
+	v.SetDefault("context_validation.test_tokens", 8000)
 	v.SetDefault("context_validation.min_context_orchestrate", 1000000)
 	v.SetDefault("context_validation.min_context_code", 200000)
 	v.SetDefault("context_validation.min_context_review", 1000000)

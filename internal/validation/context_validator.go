@@ -106,6 +106,11 @@ func (v *ContextValidator) ValidateContext(ctx context.Context) error {
 }
 
 // validateModelContext tests the actual max context for a model
+// ValidateModelContext runs context validation on a specific model
+func (v *ContextValidator) ValidateModelContext(ctx context.Context, model store.Model) error {
+	return v.validateModelContext(ctx, model)
+}
+
 func (v *ContextValidator) validateModelContext(ctx context.Context, model store.Model) error {
 	modelCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -205,7 +210,9 @@ func (v *ContextValidator) testContextSize(ctx context.Context, modelID string, 
 		"max_tokens": 100,
 	}
 
+	log.Debug().Str("model", modelID).Int("tokens", tokens).Msg("Sending context probe")
 	resp, err := v.client.TestModelWithResponse(ctx, reqBody)
+	log.Debug().Str("model", modelID).Int("tokens", tokens).Msg("Got response")
 	if err != nil {
 		return false, err
 	}

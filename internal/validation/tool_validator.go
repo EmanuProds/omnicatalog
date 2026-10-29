@@ -113,6 +113,11 @@ func (v *ToolValidator) ValidateToolCalling(ctx context.Context) error {
 }
 
 // validateModelToolCalling runs both API and OpenCode tests for a model
+// ValidateModelToolCalling runs tool calling validation on a specific model
+func (v *ToolValidator) ValidateModelToolCalling(ctx context.Context, model store.Model) error {
+	return v.validateModelToolCalling(ctx, model)
+}
+
 func (v *ToolValidator) validateModelToolCalling(ctx context.Context, model store.Model) error {
 	log.Debug().Str("model", model.ID).Msg("Starting tool calling validation")
 

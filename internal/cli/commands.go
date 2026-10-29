@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -41,6 +42,7 @@ func NewRootCommand(cfg *config.Config, version, commit, buildDate string) *cobr
 
 	// Subcommands
 	rootCmd.AddCommand(newRunCommand(cfg))
+	rootCmd.AddCommand(newSelectCommand(cfg))
 	rootCmd.AddCommand(newDaemonCommand(cfg))
 	rootCmd.AddCommand(newStatusCommand(cfg))
 	rootCmd.AddCommand(newModelsCommand(cfg))
@@ -54,6 +56,18 @@ func NewRootCommand(cfg *config.Config, version, commit, buildDate string) *cobr
 	return rootCmd
 }
 
+func newSelectCommand(cfg *config.Config) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "select",
+		Short: "Interactive model selection and combo management",
+		Long:  `Select models for validation and manage OpenCode combos.`, 
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runInteractiveSelection(cfg)
+		},
+	}
+	return cmd
+}
+
 func newRunCommand(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -65,6 +79,7 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 			forceRevalidate, _ := cmd.Flags().GetBool("force-revalidate")
 			testAll, _ := cmd.Flags().GetBool("all")
 			verbose, _ := cmd.Flags().GetBool("verbose")
+			interactive, _ := cmd.Flags().GetBool("interactive")
 			if verbose {
 				zerolog.SetGlobalLevel(zerolog.DebugLevel)
 			} else {
@@ -76,6 +91,10 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 				Bool("only_new", onlyNew).
 				Bool("force_revalidate", forceRevalidate).
 				Msg("Starting full validation")
+
+			if interactive {
+				return runInteractiveSelection(cfg)
+			}
 
 			ctx := context.Background()
 
@@ -289,6 +308,7 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 	cmd.Flags().Bool("force-revalidate", false, "Force revalidation of all models")
 	cmd.Flags().Bool("all", false, "Test all providers and models without interactive selection")
 	cmd.Flags().Bool("verbose", false, "Enable detailed per-model logging")
+	cmd.Flags().Bool("interactive", false, "Show interactive selection menu")
 	return cmd
 }
 
@@ -726,5 +746,462 @@ func formatTokens(n int) string {
 	}
 	return fmt.Sprintf("%d", n)
 }
+
+func runInteractiveSelection(cfg *config.Config) error {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Println()
+		fmt.Println("=== OmniCatalog Selection Menu ===")
+		fmt.Println("  1) Auto selection       - Select free + tool_calling models from OmniRoute, quick test, create combos")
+		fmt.Println("  2) Manual selection     - Choose providers/models manually for combos")
+		fmt.Println("  3) Debug selection      - Test unknown models (full pipeline: free, tool, context, speed)")
+		fmt.Println("  4) Update combos        - Sync and update OpenCode combos with functional models from DB")
+		fmt.Println("  5) Exit")
+		fmt.Print("Choose option [1-5]: ")
+		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		switch line {
+		case "1":
+			return runAutoSelection(cfg)
+		case "2":
+			return runManualSelection(cfg)
+		case "3":
+			return runDebugSelection(cfg)
+		case "4":
+			return runUpdateCombos(cfg)
+		case "5", "q", "Q":
+			fmt.Println("Exiting")
+			return nil
+		default:
+			fmt.Println("Invalid option")
+		}
+	}
+}
+
+// runAutoSelection selects free + tool_calling models from OmniRoute, quick test, create combos
+func runAutoSelection(cfg *config.Config) error {
+	ctx := context.Background()
+	fmt.Println("Auto selection: fetching free + tool_calling models from OmniRoute...")
+
+	client := omniroute.NewClient(cfg)
+	storeInstance, err := store.NewStore(cfg.Database.Path, cfg.Database.MigrationDir)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer storeInstance.Close()
+
+	discoverySvc := discovery.NewDiscovery(cfg, storeInstance)
+
+	// Sync all providers and models
+	fmt.Println("  Syncing providers and models...")
+	if err := discoverySvc.SyncAll(ctx); err != nil {
+		return fmt.Errorf("sync failed: %w", err)
+	}
+
+	// Get models that are explicitly free (pricing=0 or :free suffix) AND support tools
+	filter := store.ModelFilter{
+		IsFree:        boolPtr(true),
+		SupportsTools: boolPtr(true),
+	}
+	models, err := storeInstance.GetModels(filter)
+	if err != nil {
+		return fmt.Errorf("failed to get models: %w", err)
+	}
+
+	// Filter to only explicitly free models (free_confirmed or :free suffix or pricing=0)
+	testTokens := cfg.ContextVal.TestTokens
+	if testTokens <= 0 {
+		testTokens = 8000
+	}
+	var candidates []store.Model
+	for _, m := range models {
+		isExplicitFree := m.FreeConfirmed ||
+			strings.HasSuffix(m.ID, ":free") ||
+			(m.PricingInput != nil && *m.PricingInput == 0 && m.PricingOutput != nil && *m.PricingOutput == 0)
+
+		if !isExplicitFree {
+			continue
+		}
+		if m.ContextWindow == nil || *m.ContextWindow < testTokens {
+			continue
+		}
+
+		// Only include API-compatible providers (skip CLI-based like aug, kilocode, etc.)
+		apiCompatibleProviders := map[string]bool{
+			"openrouter":   true,
+			"groq":         true,
+			"gemini":       true,
+			"mistral":      true,
+			"openadapter":  true,
+			"opencode-zen": true,
+			"cloudflare-ai": true,
+			"nvidia":       true,
+			"huggingface":  true,
+			"bazaarlink":   true,
+			"poolside":     true,
+		}
+		if apiCompatibleProviders[m.ProviderID] && isExplicitFree {
+			candidates = append(candidates, m)
+		}
+	}
+
+	// Limit to max 50 models for auto selection
+	if len(candidates) > 50 {
+		candidates = candidates[:50]
+	}
+
+	fmt.Printf("  Found %d explicitly free + tool_calling models with context >= %d (limited to 50)\n", len(candidates), testTokens)
+	if len(candidates) == 0 {
+		fmt.Println("  No explicitly free candidates found")
+		return nil
+	}
+
+	// Apply selection to discovery (for validators that use discovery)
+	selectedIDs := make([]string, len(candidates))
+	for i, m := range candidates {
+		selectedIDs[i] = m.ID
+	}
+	discoverySvc.SetSelectedModels(selectedIDs)
+
+	// Run quick tool calling validation on selected models (bypass discovery filter)
+	fmt.Println("  Running quick API tool calling validation... [MARKER_AUTO_SELECT]")
+	toolValidator := validation.NewToolValidator(cfg, storeInstance, discoverySvc, client)
+	// Direct validation on selected models
+	for _, m := range candidates {
+		if err := toolValidator.ValidateModelToolCalling(ctx, m); err != nil {
+			log.Warn().Err(err).Str("model", m.ID).Msg("Tool calling validation error")
+		}
+	}
+
+	// Run context validation on selected models
+	fmt.Println("  Running context validation...")
+	contextValidator := validation.NewContextValidator(cfg, storeInstance, discoverySvc, client)
+	for _, m := range candidates {
+		if err := contextValidator.ValidateModelContext(ctx, m); err != nil {
+			log.Warn().Err(err).Str("model", m.ID).Msg("Context validation error")
+		}
+	}
+
+	// Run speed benchmark on selected models
+	fmt.Println("  Running speed benchmark...")
+	speedBench := validation.NewSpeedBenchmark(cfg, storeInstance, discoverySvc, client)
+	for _, m := range candidates {
+		if err := speedBench.BenchmarkModel(ctx, m); err != nil {
+			log.Warn().Err(err).Str("model", m.ID).Msg("Speed benchmark error")
+		}
+	}
+
+	// Update combos
+	fmt.Println("  Updating combos with selected models...")
+	comboMgr := combo.NewComboManager(cfg, storeInstance, client)
+	if err := comboMgr.UpdateCombos(ctx); err != nil {
+		return fmt.Errorf("combo update failed: %w", err)
+	}
+
+	fmt.Println("  Auto selection complete! Combos updated with explicitly free models.")
+	return nil
+}
+
+
+// runManualSelection - interactive provider/model selection
+
+// runManualSelection - interactive provider/model selection
+func runManualSelection(cfg *config.Config) error {
+	ctx := context.Background()
+	fmt.Println("Manual selection: starting interactive selection...")
+
+	client := omniroute.NewClient(cfg)
+	storeInstance, err := store.NewStore(cfg.Database.Path, cfg.Database.MigrationDir)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer storeInstance.Close()
+
+	discoverySvc := discovery.NewDiscovery(cfg, storeInstance)
+
+	// Sync all first
+	fmt.Println("  Syncing providers and models...")
+	if err := discoverySvc.SyncAll(ctx); err != nil {
+		return fmt.Errorf("sync failed: %w", err)
+	}
+
+	// Get providers with candidate models
+	providers, err := storeInstance.GetProviders()
+	if err != nil {
+		return fmt.Errorf("failed to get providers: %w", err)
+	}
+
+	// Build provider list with candidate model counts
+	testTokens := cfg.ContextVal.TestTokens
+	if testTokens <= 0 {
+		testTokens = 8000
+	}
+	providerModelMap := make(map[string][]store.Model)
+	providerItems := make([]SelectItem, 0, len(providers))
+
+	for _, p := range providers {
+		mods, _ := storeInstance.GetModels(store.ModelFilter{
+			ProviderID:    p.ID,
+			SupportsTools: boolPtr(true),
+		})
+		var cand []store.Model
+		for _, m := range mods {
+			if m.ContextWindow != nil && *m.ContextWindow >= testTokens {
+				cand = append(cand, m)
+			}
+		}
+		if len(cand) > 0 {
+			providerModelMap[p.ID] = cand
+			providerItems = append(providerItems, SelectItem{
+				ID: p.ID, Label: fmt.Sprintf("%s (%d models)", p.ID, len(cand)), Selected: false,
+			})
+		}
+	}
+
+	if len(providerItems) == 0 {
+		fmt.Println("  No providers with suitable models found")
+		return nil
+	}
+
+	// Provider selection
+	selProviders, err := Multiselect("Select providers for manual combo selection", providerItems)
+	if err != nil {
+		return err
+	}
+
+	var selectedProviderSlugs []string
+	for _, it := range selProviders {
+		if it.Selected {
+			selectedProviderSlugs = append(selectedProviderSlugs, it.ID)
+		}
+	}
+
+	// Model selection per provider
+	var selectedModelIDs []string
+	for _, slug := range selectedProviderSlugs {
+		mods := providerModelMap[slug]
+		if len(mods) == 0 {
+			continue
+		}
+		modelItems := make([]SelectItem, 0, len(mods))
+		for _, m := range mods {
+			ctxStr := "?"
+			if m.ContextWindow != nil {
+				ctxStr = formatTokens(*m.ContextWindow)
+			}
+			modelItems = append(modelItems, SelectItem{
+				ID: m.ID, Label: fmt.Sprintf("%s (ctx %s)", m.ID, ctxStr), Selected: true,
+			})
+		}
+		selModels, err := Multiselect(fmt.Sprintf("Select models for %s", slug), modelItems)
+		if err != nil {
+			// on cancel, select all for this provider
+			for _, m := range mods {
+				selectedModelIDs = append(selectedModelIDs, m.ID)
+			}
+			continue
+		}
+		for _, it := range selModels {
+			if it.Selected {
+				selectedModelIDs = append(selectedModelIDs, it.ID)
+			}
+		}
+	}
+
+	if len(selectedModelIDs) == 0 {
+		fmt.Println("No models selected")
+		return nil
+	}
+
+	// Persist selection
+	bp, _ := json.Marshal(selectedProviderSlugs)
+	bm, _ := json.Marshal(selectedModelIDs)
+	_ = storeInstance.SetSetting("selected_providers", string(bp))
+	_ = storeInstance.SetSetting("selected_models", string(bm))
+
+	// Apply to discovery
+	discoverySvc.SetSelectedModels(selectedModelIDs)
+
+	// Run full validation pipeline on selected models
+	freeValidator := validation.NewFreeValidator(cfg, storeInstance, discoverySvc, client)
+	if err := freeValidator.ValidateFreeTier(ctx); err != nil {
+		log.Warn().Err(err).Msg("Free tier validation had errors")
+	}
+
+	toolValidator := validation.NewToolValidator(cfg, storeInstance, discoverySvc, client)
+	if err := toolValidator.ValidateToolCalling(ctx); err != nil {
+		log.Warn().Err(err).Msg("Tool calling validation had errors")
+	}
+
+	contextValidator := validation.NewContextValidator(cfg, storeInstance, discoverySvc, client)
+	if err := contextValidator.ValidateContext(ctx); err != nil {
+		log.Warn().Err(err).Msg("Context validation had errors")
+	}
+
+	speedBench := validation.NewSpeedBenchmark(cfg, storeInstance, discoverySvc, client)
+	if err := speedBench.RunBenchmarks(ctx); err != nil {
+		log.Warn().Err(err).Msg("Speed benchmark had errors")
+	}
+
+	// Update combos
+	comboMgr := combo.NewComboManager(cfg, storeInstance, client)
+	if err := comboMgr.UpdateCombos(ctx); err != nil {
+		return fmt.Errorf("combo update failed: %w", err)
+	}
+
+	fmt.Println("Manual selection complete! Combos updated.")
+	return nil
+}
+
+// runDebugSelection tests unknown models with full pipeline
+
+// runDebugSelection tests unknown models with full pipeline
+func runDebugSelection(cfg *config.Config) error {
+	ctx := context.Background()
+	fmt.Println("Debug selection: testing unknown models with full pipeline...")
+
+	client := omniroute.NewClient(cfg)
+	storeInstance, err := store.NewStore(cfg.Database.Path, cfg.Database.MigrationDir)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer storeInstance.Close()
+
+	discoverySvc := discovery.NewDiscovery(cfg, storeInstance)
+
+	// Sync all first
+	fmt.Println("  Syncing providers and models...")
+	if err := discoverySvc.SyncAll(ctx); err != nil {
+		return fmt.Errorf("sync failed: %w", err)
+	}
+
+	// Get models that don't have free_confirmed=true (unknown free status)
+	filter := store.ModelFilter{
+		FreeConfirmed: boolPtr(false),
+		SupportsTools: boolPtr(true),
+	}
+	models, err := storeInstance.GetModels(filter)
+	if err != nil {
+		return fmt.Errorf("failed to get models: %w", err)
+	}
+
+	// Filter to those with sufficient context
+	testTokens := cfg.ContextVal.TestTokens
+	if testTokens <= 0 {
+		testTokens = 8000
+	}
+	var candidates []store.Model
+	for _, m := range models {
+		if m.ContextWindow != nil && *m.ContextWindow >= testTokens {
+			candidates = append(candidates, m)
+		}
+	}
+
+	fmt.Printf("  Found %d unconfirmed models with tool calling and context >= %d\n", len(candidates), testTokens)
+	if len(candidates) == 0 {
+		fmt.Println("  No candidates found")
+		return nil
+	}
+
+	// Build provider list for selection
+	byProvider := make(map[string][]store.Model)
+	for _, m := range candidates {
+		byProvider[m.ProviderID] = append(byProvider[m.ProviderID], m)
+	}
+
+	providerItems := make([]SelectItem, 0, len(byProvider))
+	for providerID, mods := range byProvider {
+		providerItems = append(providerItems, SelectItem{
+			ID: providerID, Label: fmt.Sprintf("%s (%d models)", providerID, len(mods)), Selected: true,
+		})
+	}
+
+	selProviders, err := Multiselect("Select providers to debug test", providerItems)
+	if err != nil {
+		return err
+	}
+
+	var selectedModelIDs []string
+	for _, it := range selProviders {
+		if it.Selected {
+			for _, m := range byProvider[it.ID] {
+				selectedModelIDs = append(selectedModelIDs, m.ID)
+			}
+		}
+	}
+
+	if len(selectedModelIDs) == 0 {
+		fmt.Println("No models selected")
+		return nil
+	}
+
+	// Apply to discovery
+	discoverySvc.SetSelectedModels(selectedModelIDs)
+
+	// Run FULL validation pipeline on selected models
+	fmt.Println("  Running full validation pipeline (free, tool, context, speed)...")
+
+	freeValidator := validation.NewFreeValidator(cfg, storeInstance, discoverySvc, client)
+	if err := freeValidator.ValidateFreeTier(ctx); err != nil {
+		log.Warn().Err(err).Msg("Free tier validation had errors")
+	}
+
+	toolValidator := validation.NewToolValidator(cfg, storeInstance, discoverySvc, client)
+	if err := toolValidator.ValidateToolCalling(ctx); err != nil {
+		log.Warn().Err(err).Msg("Tool calling validation had errors")
+	}
+
+	contextValidator := validation.NewContextValidator(cfg, storeInstance, discoverySvc, client)
+	if err := contextValidator.ValidateContext(ctx); err != nil {
+		log.Warn().Err(err).Msg("Context validation had errors")
+	}
+
+	speedBench := validation.NewSpeedBenchmark(cfg, storeInstance, discoverySvc, client)
+	if err := speedBench.RunBenchmarks(ctx); err != nil {
+		log.Warn().Err(err).Msg("Speed benchmark had errors")
+	}
+
+	// Update combos
+	comboMgr := combo.NewComboManager(cfg, storeInstance, client)
+	if err := comboMgr.UpdateCombos(ctx); err != nil {
+		return fmt.Errorf("combo update failed: %w", err)
+	}
+
+	fmt.Println("Debug selection complete! Validated models added to combos.")
+	return nil
+}
+
+// runUpdateCombos syncs and updates OpenCode combos with functional models from DB
+
+// runUpdateCombos syncs and updates OpenCode combos with functional models from DB
+func runUpdateCombos(cfg *config.Config) error {
+	ctx := context.Background()
+	fmt.Println("Update combos: syncing and updating OpenCode combos...")
+
+	client := omniroute.NewClient(cfg)
+	storeInstance, err := store.NewStore(cfg.Database.Path, cfg.Database.MigrationDir)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer storeInstance.Close()
+
+	discoverySvc := discovery.NewDiscovery(cfg, storeInstance)
+
+	// Sync all to get latest models
+	fmt.Println("  Syncing providers and models...")
+	if err := discoverySvc.SyncAll(ctx); err != nil {
+		return fmt.Errorf("sync failed: %w", err)
+	}
+
+	// Update combos with all validated models
+	comboMgr := combo.NewComboManager(cfg, storeInstance, client)
+	if err := comboMgr.UpdateCombos(ctx); err != nil {
+		return fmt.Errorf("combo update failed: %w", err)
+	}
+
+	fmt.Println("Combos updated successfully!")
+	return nil
+}
+
 
 func boolPtr(b bool) *bool { return &b }
