@@ -250,10 +250,13 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 
 			// Final summary
 			fmt.Println()
-			fmt.Println("=== Managed Combos ===")
+			fmt.Println("=== Final Combos ===")
+			fmt.Printf("  %-14s %-10s %-10s %s\n", "Combo", "Speed", "Context", "Models")
+			fmt.Printf("  %-14s %-10s %-10s %s\n", "-----", "-----", "-------", "------")
 			managed, _ := storeInstance.GetCombos()
 			for _, c := range managed {
-				fmt.Printf("  %s | %s ->%s\n", c.ID, c.Name, strings.Join(c.TargetModelIDs, ", "))
+				ctx := formatTokens(c.MinContextWindow)
+				fmt.Printf("  %-14s %-10s %-10s %s\n", c.ID, c.MinSpeedClass, ctx, strings.Join(c.TargetModelIDs, ", "))
 			}
 			fmt.Printf("\n  opencode.json: %s\n", cfg.OpenCode.ConfigPath)
 

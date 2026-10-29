@@ -21,6 +21,7 @@ type ContextValidator struct {
 	store      *store.Store
 	config     *config.Config
 	semaphore  chan struct{} // Limits concurrent validations
+	progress   *Progress
 }
 
 // NewContextValidator creates a new context validator
@@ -54,6 +55,8 @@ func (v *ContextValidator) ValidateContext(ctx context.Context) error {
 
 	log.Info().Int("count", len(models)).Msg("Models need context validation")
 
+	v.progress = NewProgress("Context", len(models))
+
 	byProvider := groupByProvider(models)
 
 	maxProv := v.config.FreeVal.MaxConcurrentProviders
@@ -71,6 +74,9 @@ func (v *ContextValidator) ValidateContext(ctx context.Context) error {
 			defer func() { <-provSem }()
 
 			for _, model := range pModels {
+				if v.progress != nil {
+					v.progress.Inc(model.ID)
+				}
 				if err := v.validateModelContext(ctx, model); err != nil {
 					errChan <- fmt.Errorf("model %s: %w", model.ID, err)
 				}
@@ -91,6 +97,10 @@ func (v *ContextValidator) ValidateContext(ctx context.Context) error {
 		return fmt.Errorf("context validation errors: %v", errs)
 	}
 
+	if v.progress != nil {
+		v.progress.Done()
+		v.progress = nil
+	}
 	log.Info().Msg("Context validation completed successfully")
 	return nil
 }

@@ -22,6 +22,7 @@ type ToolValidator struct {
 	store      *store.Store
 	config     *config.Config
 	semaphore  chan struct{} // Limits concurrent validations
+	progress   *Progress
 }
 
 // NewToolValidator creates a new tool calling validator
@@ -55,6 +56,8 @@ func (v *ToolValidator) ValidateToolCalling(ctx context.Context) error {
 
 	log.Info().Int("count", len(models)).Msg("Models need tool calling validation")
 
+	v.progress = NewProgress("ToolCalling", len(models))
+
 	byProvider := groupByProvider(models)
 
 	// provider-level concurrency
@@ -78,6 +81,9 @@ func (v *ToolValidator) ValidateToolCalling(ctx context.Context) error {
 			defer func() { <-provSem }()
 
 			for _, model := range pModels {
+				if v.progress != nil {
+					v.progress.Inc(model.ID)
+				}
 				if err := v.validateModelToolCalling(ctx, model); err != nil {
 					errChan <- fmt.Errorf("model %s: %w", model.ID, err)
 				}
@@ -98,6 +104,10 @@ func (v *ToolValidator) ValidateToolCalling(ctx context.Context) error {
 		return fmt.Errorf("tool calling validation errors: %v", errs)
 	}
 
+	if v.progress != nil {
+		v.progress.Done()
+		v.progress = nil
+	}
 	log.Info().Msg("Tool calling validation completed successfully")
 	return nil
 }

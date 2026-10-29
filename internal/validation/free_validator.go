@@ -21,6 +21,7 @@ type FreeValidator struct {
 	store      *store.Store
 	config     *config.Config
 	semaphore  chan struct{} // Limits concurrent providers
+	progress   *Progress
 }
 
 // NewFreeValidator creates a new free tier validator
@@ -53,6 +54,8 @@ func (v *FreeValidator) ValidateFreeTier(ctx context.Context) error {
 	}
 
 	log.Info().Int("count", len(models)).Msg("Models need free tier validation")
+
+	v.progress = NewProgress("Free", len(models))
 
 	// Group models by provider
 	modelsByProvider := make(map[string][]store.Model)
@@ -95,6 +98,10 @@ func (v *FreeValidator) ValidateFreeTier(ctx context.Context) error {
 		return fmt.Errorf("free tier validation errors: %v", errs)
 	}
 
+	if v.progress != nil {
+		v.progress.Done()
+		v.progress = nil
+	}
 	log.Info().Msg("Free tier validation completed successfully")
 	return nil
 }
@@ -120,6 +127,9 @@ func (v *FreeValidator) validateProviderModels(ctx context.Context, providerID s
 		}
 
 		log.Debug().Str("provider", providerID).Str("model", model.ID).Int("index", i+1).Msg("Testing model free tier")
+		if v.progress != nil {
+			v.progress.Inc(model.ID)
+		}
 
 		modelCtx, cancel := context.WithTimeout(ctx, modelTimeout)
 		var isFree bool

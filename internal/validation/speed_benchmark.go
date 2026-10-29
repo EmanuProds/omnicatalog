@@ -21,6 +21,7 @@ type SpeedBenchmark struct {
 	store      *store.Store
 	config     *config.Config
 	semaphore  chan struct{} // Limits concurrent benchmarks
+	progress   *Progress
 }
 
 // NewSpeedBenchmark creates a new speed benchmark
@@ -54,6 +55,8 @@ func (s *SpeedBenchmark) RunBenchmarks(ctx context.Context) error {
 
 	log.Info().Int("count", len(models)).Msg("Models need speed benchmark")
 
+	s.progress = NewProgress("Speed", len(models))
+
 	byProvider := groupByProvider(models)
 
 	maxProv := s.config.FreeVal.MaxConcurrentProviders
@@ -71,6 +74,9 @@ func (s *SpeedBenchmark) RunBenchmarks(ctx context.Context) error {
 			defer func() { <-provSem }()
 
 			for _, model := range pModels {
+				if s.progress != nil {
+					s.progress.Inc(model.ID)
+				}
 				if err := s.benchmarkModel(ctx, model); err != nil {
 					errChan <- fmt.Errorf("model %s: %w", model.ID, err)
 				}
@@ -91,6 +97,10 @@ func (s *SpeedBenchmark) RunBenchmarks(ctx context.Context) error {
 		return fmt.Errorf("speed benchmark errors: %v", errs)
 	}
 
+	if s.progress != nil {
+		s.progress.Done()
+		s.progress = nil
+	}
 	log.Info().Msg("Speed benchmark completed successfully")
 	return nil
 }
