@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -55,7 +54,11 @@ func main() {
 		log.Logger = log.Output(os.Stderr)
 	}
 
-	fmt.Printf("Starting omnicatalog version=%s\n", version)
+	log.Info().
+		Str("version", version).
+		Str("commit", commit).
+		Str("build_date", buildDate).
+		Msg("Starting omnicatalog")
 
 	// Execute CLI command
 	rootCmd := cli.NewRootCommand(cfg, version, commit, buildDate)
