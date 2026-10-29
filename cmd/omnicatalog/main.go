@@ -56,8 +56,6 @@ func main() {
 
 	log.Info().
 		Str("version", version).
-		Str("commit", commit).
-		Str("build_date", buildDate).
 		Msg("Starting omnicatalog")
 
 	// Execute CLI command
