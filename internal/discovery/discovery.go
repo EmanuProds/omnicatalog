@@ -212,7 +212,17 @@ func (d *Discovery) GetModelsForFreeValidation(ctx context.Context) ([]store.Mod
 		IsFree:        boolPtr(true),
 		FreeConfirmed: boolPtr(false),
 	}
-	return d.store.GetModels(filter)
+	models, err := d.store.GetModels(filter)
+	if err != nil {
+		return nil, err
+	}
+	var selected []store.Model
+	for _, m := range models {
+		if d.isModelSelected(m.ID) {
+			selected = append(selected, m)
+		}
+	}
+	return selected, nil
 }
 
 // GetModelsForToolCallingValidation returns models that passed free validation but need tool calling validation
