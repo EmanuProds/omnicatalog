@@ -208,6 +208,14 @@ prompt_config() {
     log_warn "Leave empty to configure later via {file:...} or environment variable"
     read -p "API Key [optional]: " API_KEY
 
+    # If no API key provided but api_key file exists, use file-based secret
+    if [[ -z "$API_KEY" && -f "$DEFAULT_CONFIG_DIR/api_key" ]]; then
+        log_info "Using existing API key file: $DEFAULT_CONFIG_DIR/api_key"
+        API_KEY_FILE="{file:$DEFAULT_CONFIG_DIR/api_key}"
+    else
+        API_KEY_FILE="${API_KEY:-{env:OMNIROUTE_API_KEY}}"
+    fi
+
     # Schedule
     echo
     echo "Schedule options:"
@@ -275,7 +283,7 @@ generate_config() {
     cat > "$CONFIG_DIR/config.yaml" <<EOF
 omniroute:
   base_url: "$OMNIROUTE_URL"
-  api_key: "${API_KEY:-{env:OMNIROUTE_API_KEY}}"
+  api_key: "${API_KEY_FILE}"
   timeout: 30s
 
 opencode:
