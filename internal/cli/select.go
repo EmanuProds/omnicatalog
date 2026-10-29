@@ -113,6 +113,7 @@ func terminalMultiselect(title string, items []SelectItem) ([]SelectItem, error)
 
 	// fix __ALL__ selected in list dynamically during render
 
+	fmt.Print("\033[2J\033[H")
 	fd := int(os.Stdin.Fd())
 	old, err := enableRawMode(fd)
 	if err != nil {
@@ -121,7 +122,7 @@ func terminalMultiselect(title string, items []SelectItem) ([]SelectItem, error)
 	defer restoreMode(fd, old)
 
 	fmt.Print("\033[?25l")
-	defer fmt.Print("\033[?25h")
+	defer fmt.Print("\033[?25h\n")
 
 	cursor := 0
 	viewport := 30
