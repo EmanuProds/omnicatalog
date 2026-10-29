@@ -220,6 +220,19 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 			if testAll {
 				// clear selection filter -> all models
 				discoverySvc.SetSelectedModels(nil)
+			} else if !(termIsTerminal(os.Stdin) && termIsTerminal(os.Stdout)) {
+				// Non-interactive: reuse saved selection if present
+				if saved, _ := storeInstance.GetSetting("selected_models"); saved != "" {
+					var ids []string
+					if json.Unmarshal([]byte(saved), &ids) == nil && len(ids) > 0 {
+						discoverySvc.SetSelectedModels(ids)
+						fmt.Printf("Using saved selection: %d model(s)\n", len(ids))
+					} else {
+						discoverySvc.SetSelectedModels(nil)
+					}
+				} else {
+					discoverySvc.SetSelectedModels(nil)
+				}
 			}
 
 			// Phase 2: Free tier validation
