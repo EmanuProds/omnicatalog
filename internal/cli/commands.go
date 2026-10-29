@@ -207,8 +207,13 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 					_ = storeInstance.SetSetting("selected_models", string(bm))
 
 					// Apply to discovery
-					discoverySvc.SetSelectedModels(selectedModelIDs)
-					log.Info().Int("providers", len(selectedProviderSlugs)).Int("models", len(selectedModelIDs)).Msg("Selection applied")
+					if len(selectedModelIDs) == 0 {
+						fmt.Println("No models selected; testing all models")
+						discoverySvc.SetSelectedModels(nil)
+					} else {
+						discoverySvc.SetSelectedModels(selectedModelIDs)
+						fmt.Printf("Selection applied: %d provider(s), %d model(s)\n", len(selectedProviderSlugs), len(selectedModelIDs))
+					}
 				}
 			}
 
