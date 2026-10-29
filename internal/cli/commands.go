@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"omnicatalog/internal/combo"
@@ -63,6 +64,13 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 			onlyNew, _ := cmd.Flags().GetBool("only-new")
 			forceRevalidate, _ := cmd.Flags().GetBool("force-revalidate")
 			testAll, _ := cmd.Flags().GetBool("all")
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			quiet, _ := cmd.Flags().GetBool("quiet")
+			if verbose {
+				zerolog.SetGlobalLevel(zerolog.DebugLevel)
+			} else if quiet {
+				zerolog.SetGlobalLevel(zerolog.WarnLevel)
+			}
 			
 			log.Info().
 				Bool("dry_run", dryRun).
@@ -251,6 +259,8 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 	cmd.Flags().Bool("only-new", false, "Validate only new/untested models")
 	cmd.Flags().Bool("force-revalidate", false, "Force revalidation of all models")
 	cmd.Flags().Bool("all", false, "Test all providers and models without interactive selection")
+	cmd.Flags().Bool("verbose", false, "Enable detailed per-model logging")
+	cmd.Flags().Bool("quiet", false, "Suppress non-essential output")
 	return cmd
 }
 

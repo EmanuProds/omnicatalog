@@ -333,7 +333,7 @@ database:
 
 logging:
   level: "info"
-  format: "json"
+  format: "text"
   output: "both"
   file_path: "$LOG_FILE"
 EOF
