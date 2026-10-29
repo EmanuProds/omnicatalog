@@ -17,6 +17,7 @@ import (
 	"omnicatalog/internal/config"
 	"omnicatalog/internal/discovery"
 	"omnicatalog/internal/omniroute"
+	"omnicatalog/internal/scheduler"
 	"omnicatalog/internal/store"
 	"omnicatalog/internal/validation"
 )
@@ -141,10 +142,30 @@ func newDaemonCommand(cfg *config.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Info().Msg("Starting daemon mode")
 
-			// TODO: Implement daemon with scheduler
-			fmt.Println("⚠️  Command 'daemon' not yet implemented")
-			fmt.Println("   Next steps: implement internal/scheduler with cron")
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
 
+			client := omniroute.NewClient(cfg)
+			storeInstance, err := store.NewStore(cfg.Database.Path, cfg.Database.MigrationDir)
+			if err != nil {
+				return fmt.Errorf("failed to open database: %w", err)
+			}
+			defer storeInstance.Close()
+
+			sched := scheduler.NewScheduler(cfg, storeInstance, client)
+			if err := sched.Start(); err != nil {
+				return fmt.Errorf("failed to start scheduler: %w", err)
+			}
+
+			log.Info().Msg("Daemon running; waiting for shutdown signal")
+			<-ctx.Done()
+
+			log.Info().Msg("Stopping scheduler")
+			if err := sched.Stop(); err != nil {
+				log.Error().Err(err).Msg("Scheduler stop error")
+			}
 			return nil
 		},
 	}
