@@ -107,7 +107,7 @@ func (v *ContextValidator) ValidateContext(ctx context.Context) error {
 
 // validateModelContext tests the actual max context for a model
 func (v *ContextValidator) validateModelContext(ctx context.Context, model store.Model) error {
-	modelCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	modelCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	ctx = modelCtx
 	log.Debug().Str("model", model.ID).Msg("Starting context validation")
