@@ -16,12 +16,12 @@ import (
 
 // ContextValidator handles context window validation for models
 type ContextValidator struct {
-	client     *omniroute.Client
-	discovery  *discovery.Discovery
-	store      *store.Store
-	config     *config.Config
-	semaphore  chan struct{} // Limits concurrent validations
-	progress   *Progress
+	client    *omniroute.Client
+	discovery *discovery.Discovery
+	store     *store.Store
+	config    *config.Config
+	semaphore chan struct{} // Limits concurrent validations
+	progress  *Progress
 }
 
 // NewContextValidator creates a new context validator
@@ -60,7 +60,9 @@ func (v *ContextValidator) ValidateContext(ctx context.Context) error {
 	byProvider := groupByProvider(models)
 
 	maxProv := v.config.FreeVal.MaxConcurrentProviders
-	if maxProv <= 0 { maxProv = 5 }
+	if maxProv <= 0 {
+		maxProv = 5
+	}
 	provSem := make(chan struct{}, maxProv)
 
 	var wg sync.WaitGroup

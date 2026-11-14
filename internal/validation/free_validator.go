@@ -16,12 +16,12 @@ import (
 
 // FreeValidator handles free tier validation for models
 type FreeValidator struct {
-	client     *omniroute.Client
-	discovery  *discovery.Discovery
-	store      *store.Store
-	config     *config.Config
-	semaphore  chan struct{} // Limits concurrent providers
-	progress   *Progress
+	client    *omniroute.Client
+	discovery *discovery.Discovery
+	store     *store.Store
+	config    *config.Config
+	semaphore chan struct{} // Limits concurrent providers
+	progress  *Progress
 }
 
 // NewFreeValidator creates a new free tier validator

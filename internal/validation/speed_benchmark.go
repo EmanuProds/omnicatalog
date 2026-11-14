@@ -16,12 +16,12 @@ import (
 
 // SpeedBenchmark handles speed/latency benchmarking for models
 type SpeedBenchmark struct {
-	client     *omniroute.Client
-	discovery  *discovery.Discovery
-	store      *store.Store
-	config     *config.Config
-	semaphore  chan struct{} // Limits concurrent benchmarks
-	progress   *Progress
+	client    *omniroute.Client
+	discovery *discovery.Discovery
+	store     *store.Store
+	config    *config.Config
+	semaphore chan struct{} // Limits concurrent benchmarks
+	progress  *Progress
 }
 
 // NewSpeedBenchmark creates a new speed benchmark
@@ -60,7 +60,9 @@ func (s *SpeedBenchmark) RunBenchmarks(ctx context.Context) error {
 	byProvider := groupByProvider(models)
 
 	maxProv := s.config.FreeVal.MaxConcurrentProviders
-	if maxProv <= 0 { maxProv = 5 }
+	if maxProv <= 0 {
+		maxProv = 5
+	}
 	provSem := make(chan struct{}, maxProv)
 
 	var wg sync.WaitGroup
@@ -149,12 +151,12 @@ func (s *SpeedBenchmark) benchmarkModel(ctx context.Context, model store.Model) 
 	speedClass := s.classifySpeed(ttftMs, tps)
 
 	benchmark := &store.Benchmark{
-		ModelID:         model.ID,
-		TTFTMs:          intPtr(ttftMs),
-		TPS:             float64Ptr(tps),
-		ToolLatencyMs:   intPtr(toolLatencyMs),
-		SpeedClass:      speedClass,
-		BenchmarkedAt:   time.Now().Format(time.RFC3339),
+		ModelID:       model.ID,
+		TTFTMs:        intPtr(ttftMs),
+		TPS:           float64Ptr(tps),
+		ToolLatencyMs: intPtr(toolLatencyMs),
+		SpeedClass:    speedClass,
+		BenchmarkedAt: time.Now().Format(time.RFC3339),
 	}
 
 	if err := s.store.SaveBenchmark(benchmark); err != nil {
@@ -214,8 +216,8 @@ func (s *SpeedBenchmark) measureTTFT(ctx context.Context, modelID string) (int, 
 			"messages": []map[string]string{
 				{"role": "user", "content": "Count from 1 to 100."},
 			},
-			"max_tokens":    200,
-			"stream":        true,
+			"max_tokens": 200,
+			"stream":     true,
 		}
 
 		ttft, err := s.client.MeasureTTFT(ctx, reqBody)

@@ -131,7 +131,7 @@ func TestComboManager_FilterModels(t *testing.T) {
 
 	// Add test models
 	s := m.store
-	
+
 	// First add provider
 	s.UpsertProvider(&store.Provider{
 		ID:       "test",
@@ -141,14 +141,14 @@ func TestComboManager_FilterModels(t *testing.T) {
 	})
 
 	s.UpsertModel(&store.Model{
-		ID:             "test/model-fast",
-		ProviderID:     "test",
-		Name:           "Fast Model",
-		ContextWindow:  intPtr(1000000),
-		SupportsTools:  true,
-		IsFree:         true,
-		FreeConfirmed:  true,
-		Capabilities:   map[string]any{"reasoning": true, "tool_calling": true, "large_context": true},
+		ID:            "test/model-fast",
+		ProviderID:    "test",
+		Name:          "Fast Model",
+		ContextWindow: intPtr(1000000),
+		SupportsTools: true,
+		IsFree:        true,
+		FreeConfirmed: true,
+		Capabilities:  map[string]any{"reasoning": true, "tool_calling": true, "large_context": true},
 	})
 	s.SaveBenchmark(&store.Benchmark{
 		ModelID:       "test/model-fast",
@@ -157,14 +157,14 @@ func TestComboManager_FilterModels(t *testing.T) {
 	})
 
 	s.UpsertModel(&store.Model{
-		ID:             "test/model-slow",
-		ProviderID:     "test",
-		Name:           "Slow Model",
-		ContextWindow:  intPtr(1000000),
-		SupportsTools:  true,
-		IsFree:         true,
-		FreeConfirmed:  true,
-		Capabilities:   map[string]any{"reasoning": true, "tool_calling": true, "large_context": true},
+		ID:            "test/model-slow",
+		ProviderID:    "test",
+		Name:          "Slow Model",
+		ContextWindow: intPtr(1000000),
+		SupportsTools: true,
+		IsFree:        true,
+		FreeConfirmed: true,
+		Capabilities:  map[string]any{"reasoning": true, "tool_calling": true, "large_context": true},
 	})
 	s.SaveBenchmark(&store.Benchmark{
 		ModelID:       "test/model-slow",
@@ -195,9 +195,9 @@ func TestComboManager_FilterModels(t *testing.T) {
 	}
 
 	criteria := ComboCriteria{
-		ID:                "orchestrate",
-		MinSpeedClass:     "normal",
-		MinContextWindow:  1000000,
+		ID:                   "orchestrate",
+		MinSpeedClass:        "normal",
+		MinContextWindow:     1000000,
 		RequiredCapabilities: []string{"reasoning", "tool_calling", "large_context"},
 	}
 
@@ -228,14 +228,14 @@ func TestComboManager_SortCandidates(t *testing.T) {
 
 	// Add models with different speeds
 	s.UpsertModel(&store.Model{
-		ID:             "test/model-ultra",
-		ProviderID:     "test",
-		Name:           "Ultra Model",
-		ContextWindow:  intPtr(1000000),
-		SupportsTools:  true,
-		IsFree:         true,
-		FreeConfirmed:  true,
-		Capabilities:   map[string]any{"reasoning": true, "tool_calling": true, "large_context": true},
+		ID:            "test/model-ultra",
+		ProviderID:    "test",
+		Name:          "Ultra Model",
+		ContextWindow: intPtr(1000000),
+		SupportsTools: true,
+		IsFree:        true,
+		FreeConfirmed: true,
+		Capabilities:  map[string]any{"reasoning": true, "tool_calling": true, "large_context": true},
 	})
 	s.SaveBenchmark(&store.Benchmark{
 		ModelID:       "test/model-ultra",
@@ -244,14 +244,14 @@ func TestComboManager_SortCandidates(t *testing.T) {
 	})
 
 	s.UpsertModel(&store.Model{
-		ID:             "test/model-fast",
-		ProviderID:     "test2",
-		Name:           "Fast Model",
-		ContextWindow:  intPtr(1000000),
-		SupportsTools:  true,
-		IsFree:         true,
-		FreeConfirmed:  true,
-		Capabilities:   map[string]any{"reasoning": true, "tool_calling": true, "large_context": true},
+		ID:            "test/model-fast",
+		ProviderID:    "test2",
+		Name:          "Fast Model",
+		ContextWindow: intPtr(1000000),
+		SupportsTools: true,
+		IsFree:        true,
+		FreeConfirmed: true,
+		Capabilities:  map[string]any{"reasoning": true, "tool_calling": true, "large_context": true},
 	})
 	s.SaveBenchmark(&store.Benchmark{
 		ModelID:       "test/model-fast",
@@ -260,14 +260,14 @@ func TestComboManager_SortCandidates(t *testing.T) {
 	})
 
 	s.UpsertModel(&store.Model{
-		ID:             "test/model-normal",
-		ProviderID:     "test3",
-		Name:           "Normal Model",
-		ContextWindow:  intPtr(1000000),
-		SupportsTools:  true,
-		IsFree:         true,
-		FreeConfirmed:  true,
-		Capabilities:   map[string]any{"reasoning": true, "tool_calling": true, "large_context": true},
+		ID:            "test/model-normal",
+		ProviderID:    "test3",
+		Name:          "Normal Model",
+		ContextWindow: intPtr(1000000),
+		SupportsTools: true,
+		IsFree:        true,
+		FreeConfirmed: true,
+		Capabilities:  map[string]any{"reasoning": true, "tool_calling": true, "large_context": true},
 	})
 	s.SaveBenchmark(&store.Benchmark{
 		ModelID:       "test/model-normal",
@@ -279,9 +279,9 @@ func TestComboManager_SortCandidates(t *testing.T) {
 	t.Logf("Validated models: %d", len(validated))
 
 	criteria := ComboCriteria{
-		ID:                "orchestrate",
-		MinSpeedClass:     "normal",
-		MinContextWindow:  1000000,
+		ID:                   "orchestrate",
+		MinSpeedClass:        "normal",
+		MinContextWindow:     1000000,
 		RequiredCapabilities: []string{"reasoning", "tool_calling", "large_context"},
 	}
 
@@ -311,9 +311,9 @@ func TestComboManager_SortCandidates(t *testing.T) {
 
 func TestComboManager_ExtractProviderModel(t *testing.T) {
 	tests := []struct {
-		input      string
-		provider   string
-		model      string
+		input    string
+		provider string
+		model    string
 	}{
 		{"anthropic/claude-sonnet-4-6", "anthropic", "claude-sonnet-4-6"},
 		{"openai/gpt-4o", "openai", "gpt-4o"},

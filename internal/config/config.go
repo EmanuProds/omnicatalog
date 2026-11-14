@@ -12,15 +12,15 @@ import (
 
 // Config represents all omnicatalog configuration
 type Config struct {
-	OmniRoute    OmniRouteConfig    `mapstructure:"omniroute"`
-	OpenCode     OpenCodeConfig     `mapstructure:"opencode"`
-	Validation   ValidationConfig   `mapstructure:"validation"`
-	SpeedTest    SpeedTestConfig    `mapstructure:"speed_test"`
-	ContextVal   ContextValConfig   `mapstructure:"context_validation"`
-	FreeVal      FreeValConfig      `mapstructure:"free_validation"`
-	Scheduler    SchedulerConfig    `mapstructure:"scheduler"`
-	Database     DatabaseConfig     `mapstructure:"database"`
-	Logging      LoggingConfig      `mapstructure:"logging"`
+	OmniRoute  OmniRouteConfig  `mapstructure:"omniroute"`
+	OpenCode   OpenCodeConfig   `mapstructure:"opencode"`
+	Validation ValidationConfig `mapstructure:"validation"`
+	SpeedTest  SpeedTestConfig  `mapstructure:"speed_test"`
+	ContextVal ContextValConfig `mapstructure:"context_validation"`
+	FreeVal    FreeValConfig    `mapstructure:"free_validation"`
+	Scheduler  SchedulerConfig  `mapstructure:"scheduler"`
+	Database   DatabaseConfig   `mapstructure:"database"`
+	Logging    LoggingConfig    `mapstructure:"logging"`
 }
 
 type OmniRouteConfig struct {
@@ -42,23 +42,23 @@ type ValidationConfig struct {
 }
 
 type SpeedTestConfig struct {
-	WarmupRequests     int     `mapstructure:"warmup_requests"`
-	TTFTSamples        int     `mapstructure:"ttft_samples"`
-	ThroughputTokens   int     `mapstructure:"throughput_tokens"`
-	MinTTFTMs          int     `mapstructure:"min_ttft_ms"`
-	MinTPS             float64 `mapstructure:"min_tps"`
-	ToolCallSamples    int     `mapstructure:"tool_call_samples"`
+	WarmupRequests   int     `mapstructure:"warmup_requests"`
+	TTFTSamples      int     `mapstructure:"ttft_samples"`
+	ThroughputTokens int     `mapstructure:"throughput_tokens"`
+	MinTTFTMs        int     `mapstructure:"min_ttft_ms"`
+	MinTPS           float64 `mapstructure:"min_tps"`
+	ToolCallSamples  int     `mapstructure:"tool_call_samples"`
 }
 
 type ContextValConfig struct {
-	Enabled                bool `mapstructure:"enabled"`
-	TestTokens             int  `mapstructure:"test_tokens"`
-	MinContextOrchestrate  int  `mapstructure:"min_context_orchestrate"`
-	MinContextCode         int  `mapstructure:"min_context_code"`
-	MinContextReview       int  `mapstructure:"min_context_review"`
-	MinContextContracts    int  `mapstructure:"min_context_contracts"`
-	MinContextDatabase     int  `mapstructure:"min_context_database"`
-	MinContextDocs         int  `mapstructure:"min_context_docs"`
+	Enabled               bool `mapstructure:"enabled"`
+	TestTokens            int  `mapstructure:"test_tokens"`
+	MinContextOrchestrate int  `mapstructure:"min_context_orchestrate"`
+	MinContextCode        int  `mapstructure:"min_context_code"`
+	MinContextReview      int  `mapstructure:"min_context_review"`
+	MinContextContracts   int  `mapstructure:"min_context_contracts"`
+	MinContextDatabase    int  `mapstructure:"min_context_database"`
+	MinContextDocs        int  `mapstructure:"min_context_docs"`
 }
 
 type FreeValConfig struct {
@@ -82,9 +82,9 @@ type DatabaseConfig struct {
 }
 
 type LoggingConfig struct {
-	Level    string `mapstructure:"level"`      // debug, info, warn, error
-	Format   string `mapstructure:"format"`     // json, text
-	Output   string `mapstructure:"output"`     // stdout, file, both
+	Level    string `mapstructure:"level"`  // debug, info, warn, error
+	Format   string `mapstructure:"format"` // json, text
+	Output   string `mapstructure:"output"` // stdout, file, both
 	FilePath string `mapstructure:"file_path"`
 }
 
@@ -111,22 +111,22 @@ func Load() (*Config, error) {
 	// Config file paths (priority order)
 	if !envConfigSet {
 		configPaths := []string{
-		"/etc/omnicatalog/config.yaml",
-		"$HOME/.config/omnicatalog/config.yaml",
-		"./config.yaml",
-		"./configs/config.yaml",
-	}
-
-	for _, path := range configPaths {
-		expanded := expandPath(path)
-		if _, err := os.Stat(expanded); err == nil {
-			v.SetConfigFile(expanded)
-			if err := v.ReadInConfig(); err != nil {
-				return nil, fmt.Errorf("error reading config %s: %w", expanded, err)
-			}
-			break
+			"/etc/omnicatalog/config.yaml",
+			"$HOME/.config/omnicatalog/config.yaml",
+			"./config.yaml",
+			"./configs/config.yaml",
 		}
-	}
+
+		for _, path := range configPaths {
+			expanded := expandPath(path)
+			if _, err := os.Stat(expanded); err == nil {
+				v.SetConfigFile(expanded)
+				if err := v.ReadInConfig(); err != nil {
+					return nil, fmt.Errorf("error reading config %s: %w", expanded, err)
+				}
+				break
+			}
+		}
 	}
 
 	// Environment variables (prefix OMNICATALOG_)
@@ -202,7 +202,7 @@ func setDefaults(v *viper.Viper) {
 
 	// Database
 	v.SetDefault("database.path", "~/.local/share/omnicatalog/catalog.db")
-	v.SetDefault("database.migration_dir", "./migrations")
+	v.SetDefault("database.migration_dir", "") // empty = use embedded migrations
 
 	// Logging
 	v.SetDefault("logging.level", "info")

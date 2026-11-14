@@ -10,13 +10,13 @@ import (
 
 // Progress renders a simple text progress bar with ETA.
 type Progress struct {
-	mu       sync.Mutex
-	phase    string
-	total    int
-	done     int
-	start    time.Time
-	last     time.Time
-	width    int
+	mu    sync.Mutex
+	phase string
+	total int
+	done  int
+	start time.Time
+	last  time.Time
+	width int
 }
 
 // NewProgress creates a progress tracker for a phase.
@@ -25,11 +25,11 @@ func NewProgress(phase string, total int) *Progress {
 		total = 1
 	}
 	return &Progress{
-		phase:  phase,
-		total:  total,
-		start:  time.Now(),
-		last:   time.Now(),
-		width:  30,
+		phase: phase,
+		total: total,
+		start: time.Now(),
+		last:  time.Now(),
+		width: 30,
 	}
 }
 

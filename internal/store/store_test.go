@@ -237,11 +237,11 @@ func TestStore_Validation(t *testing.T) {
 	// Create model first
 	ctx := 1000000
 	m := &Model{
-		ID:             "test/model",
-		ProviderID:     "test",
-		Name:           "Test Model",
-		ContextWindow:  &ctx,
-		SupportsTools:  true,
+		ID:            "test/model",
+		ProviderID:    "test",
+		Name:          "Test Model",
+		ContextWindow: &ctx,
+		SupportsTools: true,
 	}
 	err = s.UpsertModel(m)
 	if err != nil {
@@ -290,11 +290,11 @@ func TestStore_Benchmark(t *testing.T) {
 
 	ctx := 1000000
 	m := &Model{
-		ID:             "test/model",
-		ProviderID:     "test",
-		Name:           "Test Model",
-		ContextWindow:  &ctx,
-		SupportsTools:  true,
+		ID:            "test/model",
+		ProviderID:    "test",
+		Name:          "Test Model",
+		ContextWindow: &ctx,
+		SupportsTools: true,
 	}
 	err = s.UpsertModel(m)
 	if err != nil {
@@ -307,13 +307,13 @@ func TestStore_Benchmark(t *testing.T) {
 	toolLat := 1200
 	speed := "fast"
 	b := &Benchmark{
-		ModelID:        m.ID,
-		TTFTMs:         &ttft,
-		TPS:            &tps,
-		TotalMs:        &total,
-		ToolLatencyMs:  &toolLat,
-		SpeedClass:     speed,
-		BenchmarkedAt:  time.Now().Format(time.RFC3339),
+		ModelID:       m.ID,
+		TTFTMs:        &ttft,
+		TPS:           &tps,
+		TotalMs:       &total,
+		ToolLatencyMs: &toolLat,
+		SpeedClass:    speed,
+		BenchmarkedAt: time.Now().Format(time.RFC3339),
 	}
 	err = s.SaveBenchmark(b)
 	if err != nil {

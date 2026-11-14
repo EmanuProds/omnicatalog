@@ -8,7 +8,6 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
-
 )
 
 // SelectItem represents an entry in a multiselect.

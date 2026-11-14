@@ -88,8 +88,7 @@ func TestClient_GetModels(t *testing.T) {
 					OwnedBy:         "anthropic",
 					ContextLength:   1000000,
 					MaxOutputTokens: 8192,
-					
-					
+
 					Pricing: &ModelPricing{
 						Input:  0,
 						Output: 0,
@@ -105,7 +104,7 @@ func TestClient_GetModels(t *testing.T) {
 					OwnedBy:         "groq",
 					ContextLength:   131072,
 					MaxOutputTokens: 8192,
-					
+
 					Pricing: &ModelPricing{
 						Input:  0,
 						Output: 0,
@@ -172,7 +171,6 @@ func TestClient_QueryModels(t *testing.T) {
 					OwnedBy:         "anthropic",
 					ContextLength:   1000000,
 					MaxOutputTokens: 8192,
-					
 				},
 			},
 		}
@@ -257,8 +255,8 @@ func TestClient_GetCombos(t *testing.T) {
 	if combos[0].ID != "orchestrate" {
 		t.Errorf("unexpected combo ID: %s", combos[0].ID)
 	}
-	if len(combos[0].Targets) != 1 {
-		t.Errorf("expected 1 target, got %d", len(combos[0].Targets))
+	if len(combos[0].Models) != 1 {
+		t.Errorf("expected 1 model, got %d", len(combos[0].Models))
 	}
 }
 
@@ -281,7 +279,7 @@ func TestClient_CreateCombo(t *testing.T) {
 			ID:          "test-combo",
 			Name:        "test-combo",
 			Strategy:    "auto",
-			Targets:     req.Targets,
+			Models:      req.Models,
 			Enabled:     true,
 			Description: req.Description,
 			CreatedAt:   time.Now().Format(time.RFC3339),
@@ -306,7 +304,7 @@ func TestClient_CreateCombo(t *testing.T) {
 	combo, err := client.CreateCombo(ctx, ComboRequest{
 		Name:        "test-combo",
 		Strategy:    "auto",
-		Targets:     []ComboTarget{{Provider: "anthropic", Model: "claude-sonnet-4-6", Weight: 1}},
+		Models:      []ComboModel{{ID: "combo-model-1", Kind: "model", Model: "anthropic/claude-sonnet-4-6", ProviderID: "anthropic", Weight: 1}},
 		Enabled:     true,
 		Description: "Test combo",
 	})
@@ -329,16 +327,16 @@ func TestClient_GetCatalog(t *testing.T) {
 			Object: "list",
 			Data: []CatalogModel{
 				{
-					ID:                "anthropic/claude-sonnet-4-6",
-					Provider:          "anthropic",
-					Name:              "Claude Sonnet 4.6",
-					ContextWindow:     1000000,
-					MaxOutputTokens:   8192,
-					SupportsTools:     true,
-					SupportsVision:    true,
-					Pricing:           &ModelPricing{Input: 0, Output: 0},
-					Capabilities:      ModelCapabilities{ToolCalling: true, Vision: true},
-					Free:              true,
+					ID:              "anthropic/claude-sonnet-4-6",
+					Provider:        "anthropic",
+					Name:            "Claude Sonnet 4.6",
+					ContextWindow:   1000000,
+					MaxOutputTokens: 8192,
+					SupportsTools:   true,
+					SupportsVision:  true,
+					Pricing:         &ModelPricing{Input: 0, Output: 0},
+					Capabilities:    ModelCapabilities{ToolCalling: true, Vision: true},
+					Free:            true,
 				},
 			},
 		}
@@ -440,7 +438,7 @@ func TestClient_TestModelToolCalling_NoToolCalls(t *testing.T) {
 			"choices": []map[string]any{
 				{
 					"message": map[string]any{
-						"content": "I cannot use tools",
+						"content":    "I cannot use tools",
 						"tool_calls": []any{},
 					},
 				},

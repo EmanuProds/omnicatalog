@@ -17,12 +17,12 @@ import (
 
 // ToolValidator handles tool calling validation for models
 type ToolValidator struct {
-	client     *omniroute.Client
-	discovery  *discovery.Discovery
-	store      *store.Store
-	config     *config.Config
-	semaphore  chan struct{} // Limits concurrent validations
-	progress   *Progress
+	client    *omniroute.Client
+	discovery *discovery.Discovery
+	store     *store.Store
+	config    *config.Config
+	semaphore chan struct{} // Limits concurrent validations
+	progress  *Progress
 }
 
 // NewToolValidator creates a new tool calling validator

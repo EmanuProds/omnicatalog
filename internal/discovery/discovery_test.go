@@ -378,11 +378,11 @@ func TestDiscovery_GetModelsForBenchmark(t *testing.T) {
 	// Add context validation results via SaveValidation
 	for _, m := range models {
 		s.SaveValidation(&store.Validation{
-			ModelID:         m.ID,
-			ValidationType:  "context",
-			Status:          "passed",
-			Details:         map[string]any{"test_tokens": 100000},
-			TestedAt:        time.Now().Format(time.RFC3339),
+			ModelID:        m.ID,
+			ValidationType: "context",
+			Status:         "passed",
+			Details:        map[string]any{"test_tokens": 100000},
+			TestedAt:       time.Now().Format(time.RFC3339),
 		})
 	}
 
