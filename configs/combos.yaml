@@ -1,0 +1,268 @@
+# OmniCatalog — Combo catalog (first curated version)
+#
+# Maps model families to the 6 combos. Matching is on the full model id
+# ("provider/model", case-insensitive glob). Lists are ORDERED: the first
+# glob in `prefer` is the strongest candidate for the role.
+#
+# Rules (see PLAN.md §4):
+#   - A model is eligible for a combo only if its family is listed here
+#     AND it passes the combo gates (free admitted + tool_calling + context
+#     minimum + speed class minimum).
+#   - Quota: 2 distinct models per account per provider, spread across combos
+#     (2 x accounts per provider). orchestrate prefers reasoning families;
+#     the remaining combos prefer fast/specialized families.
+#   - orchestrate<->other-combos repetition allowed; avoid excess elsewhere.
+#   - Each combo must end up with at least one model or it fails.
+#
+# Evidence notes (official launch tables / vendor blogs, Nov 2026):
+#   DeepSeek-V4.1-Flash-1017  — DeepSWE 77.0 (best listed), TB 2.1 90.6, TB 3.0/4.0 30-42
+#   GLM-5.3                  — DeepSWE 66.9, TB 2.1 88.2, TB 3.0 28.3, SOTA open-weights coding
+#   Kimi-K3 / K3.1-Pro       — DeepSWE 67.5, TB 2.1 88.3, 1M context
+#   Kimi-K2.7-Code           — Kimi Code Bench v2 62.0, ~256K, thinking-optimized
+#   Qwen3-Coder-Next / Qwen3-Coder-480B — code-specialized (SWE-bench verified ~70+ class)
+#   Qwen3.8-Max              — TB 2.1 86.6, SWE-bench Pro 67.7, 1M context
+#   Qwen3.6-Plus             — 1M context, coding/generalist, widely free via Qwen Cloud
+#   Claude-Fable-5 (Opus 5.5 / Sonnet 5) — 1M context, SWE-bench Pro up to 80+, frontier coding
+#   GPT-5.6-Sol/Terra/Luna   — TB 2.1 84.7-91.9, agentic leader, 1.05M context
+#   Gemini-3.1-Pro-Preview   — SWE-bench Verified 80.6 (independent), 1M context
+#   Nemotron-3-Ultra/Super   — PinchBench 91%/85.6%, 1M context, agentic reasoning
+#   Step-5-Preview           — specialty coding model
+#   Mimo-V2.5/2.6           — 1M context, cheap/fast generalist
+#   Minimax-M3/M2.7          — 1M context, strong generalist
+#   Mistral-Large-3/4       — 128K/262K, open-weight generalist
+#   GPT-OSS-120B/20B        — 128/131K, open-weight coding
+#
+# NOTE: families here match only models the operator's instance actually
+# serves admitted-free today; unknown-yet-good families simply never match.
+#
+# Patterns that always disqualify a model from combos (never chat-coding models):
+exclude:
+  - "*-image*"
+  - "*-tts-*"
+  - "*-audio-*"
+  - "*-transcribe*"
+  - "*-embed*"
+  - "*-ocr*"
+  - "*-rerank*"
+  - "*-guard*"
+  - "*-detect*"
+  - "*-melotts*"
+  - "*-nano-banana-*"
+  - "*-lyria-*"
+  - "*-computer-use*"
+  - "*-deep-research*"
+  - "*-robotics*"
+  - "*-smart-turn*"
+  - "*flux*"
+  - "*dreamshaper*"
+  - "*llava*"
+  - "*moondream*"
+  - "*phonellm*"
+  - "*sdxl*"
+  - "*distilbert*"
+  - "*resnet*"
+  - "*bge-*"
+  - "*arctic-embed*"
+  - "*codestral-embed*"
+  - "*mistral-embed*"
+  - "*nvclip*"
+  - "*nv-embed*"
+  - "*nemotron-parse*"
+  - "*deplot*"
+  - "*indictrans*"
+  - "*m2m100*"
+  - "*riva-translate*"
+  - "*lyria*"
+  - "*tao-p*"
+
+#
+# Global quota rules (see PLAN.md §4):
+#   open_weight_min — min open-weights models per combo (proprietary routes
+#   like Claude/GPT/Gemini are fine for the rest, since the gateway serves
+#   them free today). Open-weight families: DeepSeek, GLM, Kimi, Qwen,
+#   Nemotron, Mistral (Large/Codestral/Devstral), Gemma, Step, MiniMax,
+#   GPT-OSS, Command-A (Reasoning), Coder-Next.
+open_weight_min: 2
+
+combos:
+  orchestrate:
+    # Reasoning & planning, 1M context, speed normal+.
+    require: [tool_calling]
+    prefer:
+      - "*/claude-fable-5*"
+      - "*/claude-opus-5*"
+      - "*/claude-opus-4-8*"
+      - "*/claude-opus-4-7*"
+      - "*/gpt-5.6-sol*"
+      - "*/gpt-5.5*"
+      - "*/gpt-5.4*"
+      - "*/gemini-3.1-pro*"
+      - "*/deepseek-v4.1-flash-1017*"
+      - "*/deepseek-v4*"
+      - "*/deepseek-v3.2*"
+      - "*/glm-5.3*"
+      - "*/glm-5.2*"
+      - "*/glm-5*"
+      - "*/kimi-k3*"
+      - "*/kimi-k3.1-pro*"
+      - "*/qwen3.8-max*"
+      - "*/qwen3.6-plus*"
+      - "*/nemotron-3-ultra*"
+      - "*/nemotron-3-super*"
+      - "*/grok-4.3*"
+      - "*/minimax-m3*"
+      - "*/mimo-v2.5-pro*"
+      - "*/deepseek-r1*"
+
+  code:
+    # Speed + code quality. Ultra preferred. 200k min.
+    require: [tool_calling]
+    prefer:
+      - "*/deepseek-v4.1-flash-1017*"
+      - "*/deepseek-v4-flash*"
+      - "*/deepseek-v4-pro*"
+      - "*/deepseek-v4*"
+      - "*/step-5-preview*"
+      - "*/kimi-k2.7-code*"
+      - "*/qwen3-coder-next*"
+      - "*/qwen3-coder-480b*"
+      - "*/qwen3-coder*"
+      - "*/glm-5.3-flash*"
+      - "*/glm-5.3*"
+      - "*/glm-5.2*"
+      - "*/qwen3.8-27b*"
+      - "*/qwen3.6-27b*"
+      - "*/qwen3.6-35b-a3b*"
+      - "*/gpt-oss-120b*"
+      - "*/gpt-oss-20b*"
+      - "*/claude-haiku-5*"
+      - "*/devstral*"
+      - "*/codestral*"
+      - "*/deepseek-v3.2*"
+      - "*/deepseek-v3.1*"
+      - "*/deepseek-r1-distill-qwen*"
+      - "*/gemini-3.1-flash-lite*"
+
+  review:
+    # Bug finding / architecture review. 1M context. Fast+ preferred.
+    require: [tool_calling]
+    prefer:
+      - "*/claude-fable-5*"
+      - "*/claude-opus-5*"
+      - "*/claude-opus-4-8*"
+      - "*/claude-opus-4-7*"
+      - "*/claude-sonnet-5*"
+      - "*/claude-sonnet-4-6*"
+      - "*/gpt-5.6-sol*"
+      - "*/gpt-5.6-terra*"
+      - "*/gpt-5.6-luna*"
+      - "*/gpt-5.5*"
+      - "*/gemini-3.1-pro*"
+      - "*/grok-4.3*"
+      - "*/deepseek-v4.1-flash-1017*"
+      - "*/deepseek-v4*"
+      - "*/glm-5.3*"
+      - "*/glm-5.2*"
+      - "*/kimi-k3*"
+      - "*/kimi-k3.1-pro*"
+      - "*/qwen3.8-max*"
+      - "*/qwen3.6-plus*"
+      - "*/command-a-reasoning*"
+      - "*/deepseek-r1*"
+      - "*/nemotron-3-ultra*"
+
+  contracts:
+    # Structured JSON / schema / OpenAPI <-> backend wiring. 200k min.
+    require: [tool_calling]
+    prefer:
+      - "*/claude-sonnet-5*"
+      - "*/claude-sonnet-4-6*"
+      - "*/claude-haiku-5*"
+      - "*/claude-opus-5*"
+      - "*/gpt-5.6-sol*"
+      - "*/gpt-5.6-luna*"
+      - "*/gpt-5.5*"
+      - "*/gpt-5.4*"
+      - "*/gemini-3.1-pro-preview*"
+      - "*/gemini-3.1-pro*"
+      - "*/gemini-3.1-flash-lite*"
+      - "*/gemma-4-31b*"
+      - "*/gemma-4-26b*"
+      - "*/glm-5.3*"
+      - "*/glm-5.2*"
+      - "*/kimi-k3*"
+      - "*/kimi-k2.7-code*"
+      - "*/kimi-k2.6*"
+      - "*/minimax-m3*"
+      - "*/minimax-m2.7*"
+      - "*/mimo-v2.5-pro*"
+      - "*/mimo-v2.6-pro*"
+      - "*/mimo-v2.6-flash*"
+      - "*/qwen3.8-27b*"
+      - "*/qwen3.6-plus*"
+      - "*/grok-4.3*"
+      - "*/deepseek-v4.1-flash-1017*"
+      - "*/mistral-large-3*"
+      - "*/mistral-large-4*"
+      - "*/gpt-oss-120b*"
+
+  database:
+    # SQL/NoSQL/migrations/optimization. 200k min.
+    require: [tool_calling]
+    prefer:
+      - "*/deepseek-v4.1-flash-1017*"
+      - "*/deepseek-v4*"
+      - "*/deepseek-v3.2*"
+      - "*/deepseek-r1*"
+      - "*/qwen3-coder-next*"
+      - "*/qwen3-coder-480b*"
+      - "*/qwen3-coder*"
+      - "*/qwen3.6-35b-a3b*"
+      - "*/qwen3.6-plus*"
+      - "*/codestral*"
+      - "*/starcoder2*"
+      - "*/glm-5.3*"
+      - "*/glm-5.2*"
+      - "*/glm-5.1*"
+      - "*/gpt-oss-120b*"
+      - "*/gpt-oss-20b*"
+      - "*/gemma-4-31b*"
+      - "*/gemma-4-26b*"
+      - "*/kimi-k2*"
+      - "*/kimi-k3*"
+      - "*/mimo-v2.5*"
+      - "*/mistral-large-3*"
+      - "*/mistral-large-4*"
+      - "*/devstral*"
+      - "*/nemotron-3-nano*"
+      - "*/nemotron-3-super*"
+
+  docs:
+    # Docs/READMEs/PRs. Slow ok. 1M min.
+    require: [tool_calling]
+    prefer:
+      - "*/claude-fable-5*"
+      - "*/claude-opus-5*"
+      - "*/claude-sonnet-5*"
+      - "*/gpt-5.6-sol*"
+      - "*/gpt-5.6-terra*"
+      - "*/gpt-5.6-luna*"
+      - "*/gpt-5.5*"
+      - "*/gemini-3.1-pro*"
+      - "*/gemini-3-flash*"
+      - "*/gemini-3.1-flash*"
+      - "*/glm-5.3*"
+      - "*/glm-5.2*"
+      - "*/qwen3.8-max*"
+      - "*/qwen3.6-plus*"
+      - "*/minimax-m3*"
+      - "*/minimax-m2.1*"
+      - "*/minimax-m2.5*"
+      - "*/mimo-v2.5*"
+      - "*/mimo-v2.6-flash*"
+      - "*/kimi-k2*"
+      - "*/step-5-preview*"
+      - "*/deepseek-v4.1-flash-1017*"
+      - "*/nemotron-3-ultra*"
+      - "*/grok-4.3*"
+      - "*/mistral-large-3*"
