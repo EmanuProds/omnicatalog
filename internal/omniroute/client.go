@@ -22,28 +22,28 @@ type Client struct {
 
 // Provider represents an OmniRoute provider
 type Provider struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Status      string                 `json:"status"`
-	FreeTier    bool                   `json:"free_tier"`
-	Metadata    map[string]any         `json:"metadata,omitempty"`
-	LastChecked *time.Time             `json:"last_checked,omitempty"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Status      string         `json:"status"`
+	FreeTier    bool           `json:"free_tier"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	LastChecked *time.Time     `json:"last_checked,omitempty"`
 }
 
 // Model represents an OmniRoute model (matches API response)
 type Model struct {
-	ID                string            `json:"id"`
-	Object            string            `json:"object"`
-	Created           int64             `json:"created"`
-	OwnedBy           string            `json:"owned_by"`
-	ContextLength     int               `json:"context_length"`
-	MaxInputTokens    int               `json:"max_input_tokens"`
-	MaxOutputTokens   int               `json:"max_output_tokens"`
-	Pricing           *ModelPricing     `json:"pricing,omitempty"`
-	Capabilities      ModelCapabilities `json:"capabilities,omitempty"`
-	Description       string            `json:"description,omitempty"`
-	InputModalities   []string          `json:"input_modalities,omitempty"`
-	OutputModalities  []string          `json:"output_modalities,omitempty"`
+	ID               string            `json:"id"`
+	Object           string            `json:"object"`
+	Created          int64             `json:"created"`
+	OwnedBy          string            `json:"owned_by"`
+	ContextLength    int               `json:"context_length"`
+	MaxInputTokens   int               `json:"max_input_tokens"`
+	MaxOutputTokens  int               `json:"max_output_tokens"`
+	Pricing          *ModelPricing     `json:"pricing,omitempty"`
+	Capabilities     ModelCapabilities `json:"capabilities,omitempty"`
+	Description      string            `json:"description,omitempty"`
+	InputModalities  []string          `json:"input_modalities,omitempty"`
+	OutputModalities []string          `json:"output_modalities,omitempty"`
 }
 
 // SupportsTools returns true if model supports tool calling
@@ -74,12 +74,12 @@ type ModelPricing struct {
 
 // ModelCapabilities represents model capabilities
 type ModelCapabilities struct {
-	Vision       bool `json:"vision"`
-	ToolCalling  bool `json:"tool_calling"`
-	Reasoning    bool `json:"reasoning"`
-	Thinking     bool `json:"thinking"`
-	Attachment   bool `json:"attachment"`
-	Temperature  bool `json:"temperature"`
+	Vision      bool `json:"vision"`
+	ToolCalling bool `json:"tool_calling"`
+	Reasoning   bool `json:"reasoning"`
+	Thinking    bool `json:"thinking"`
+	Attachment  bool `json:"attachment"`
+	Temperature bool `json:"temperature"`
 }
 
 // ModelsResponse represents the models list response
@@ -106,46 +106,48 @@ type ModelsQueryResponse struct {
 
 // Combo represents an OmniRoute routing combo
 type Combo struct {
-	ID                   string   `json:"id"`
-	Name                 string   `json:"name"`
-	Description          string   `json:"description"`
-	Strategy             string   `json:"strategy"`
-	Targets              []ComboTarget `json:"targets"`
-	Enabled              bool     `json:"enabled"`
-	CreatedAt            string   `json:"created_at"`
-	UpdatedAt            string   `json:"updated_at"`
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Description string       `json:"description"`
+	Strategy    string       `json:"strategy"`
+	Models      []ComboModel `json:"models"`
+	Enabled     bool         `json:"enabled"`
+	CreatedAt   string       `json:"created_at"`
+	UpdatedAt   string       `json:"updated_at"`
 }
 
-// ComboTarget represents a target model in a combo
-type ComboTarget struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	Weight   int    `json:"weight"`
+// ComboModel represents a target model in a combo (OmniRoute format)
+type ComboModel struct {
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	Model      string `json:"model"`
+	ProviderID string `json:"providerId"`
+	Weight     int    `json:"weight"`
 }
 
 // ComboRequest represents a combo create/update request
 type ComboRequest struct {
-	Name        string        `json:"name"`
-	Strategy    string        `json:"strategy"`
-	Targets     []ComboTarget `json:"targets"`
-	Enabled     bool          `json:"enabled"`
-	Description string        `json:"description,omitempty"`
+	Name        string       `json:"name"`
+	Strategy    string       `json:"strategy"`
+	Models      []ComboModel `json:"models"`
+	Enabled     bool         `json:"enabled"`
+	Description string       `json:"description,omitempty"`
 }
 
 // CatalogModel represents a model in the full catalog
 type CatalogModel struct {
-	ID                string         `json:"id"`
-	Provider          string         `json:"provider"`
-	Name              string         `json:"name"`
-	ContextWindow     int            `json:"context_window"`
-	MaxOutputTokens   int            `json:"max_output_tokens"`
-	SupportsTools     bool           `json:"supports_tools"`
-	SupportsVision    bool           `json:"supports_vision"`
-	SupportsReasoning bool           `json:"supports_reasoning"`
-	Pricing           *ModelPricing  `json:"pricing,omitempty"`
+	ID                string            `json:"id"`
+	Provider          string            `json:"provider"`
+	Name              string            `json:"name"`
+	ContextWindow     int               `json:"context_window"`
+	MaxOutputTokens   int               `json:"max_output_tokens"`
+	SupportsTools     bool              `json:"supports_tools"`
+	SupportsVision    bool              `json:"supports_vision"`
+	SupportsReasoning bool              `json:"supports_reasoning"`
+	Pricing           *ModelPricing     `json:"pricing,omitempty"`
 	Capabilities      ModelCapabilities `json:"capabilities,omitempty"`
-	Free              bool           `json:"free"`
-	Description       string         `json:"description,omitempty"`
+	Free              bool              `json:"free"`
+	Description       string            `json:"description,omitempty"`
 }
 
 // CatalogResponse represents the full catalog response
@@ -157,8 +159,8 @@ type CatalogResponse struct {
 // NewClient creates a new OmniRoute client
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
-		baseURL: cfg.OmniRoute.BaseURL,
-		apiKey:  cfg.OmniRoute.APIKey,
+		baseURL:    cfg.OmniRoute.BaseURL,
+		apiKey:     cfg.OmniRoute.APIKey,
 		httpClient: &http.Client{
 			// No global timeout; rely on context timeouts for per-request control
 		},
@@ -195,11 +197,11 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body any) (
 
 // providerConnection is a single OmniRoute provider connection
 type providerConnection struct {
-	ID                 string         `json:"id"`
-	Provider           string         `json:"provider"`
-	Name               string         `json:"name"`
-	IsActive           bool           `json:"isActive"`
-	TestStatus         string         `json:"testStatus"`
+	ID                   string         `json:"id"`
+	Provider             string         `json:"provider"`
+	Name                 string         `json:"name"`
+	IsActive             bool           `json:"isActive"`
+	TestStatus           string         `json:"testStatus"`
 	ProviderSpecificData map[string]any `json:"providerSpecificData"`
 }
 
@@ -331,12 +333,29 @@ func (c *Client) GetCombos(ctx context.Context) ([]Combo, error) {
 	var result struct {
 		Object string  `json:"object"`
 		Data   []Combo `json:"data"`
+		Combos []Combo `json:"combos"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode combos response: %w", err)
 	}
-
+	if len(result.Combos) > 0 {
+		return result.Combos, nil
+	}
 	return result.Data, nil
+}
+
+// GetComboByName finds a combo by its name (lists all and filters)
+func (c *Client) GetComboByName(ctx context.Context, name string) (*Combo, error) {
+	combos, err := c.GetCombos(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range combos {
+		if combos[i].Name == name {
+			return &combos[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // GetCombo gets a specific combo by ID

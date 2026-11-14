@@ -2,12 +2,13 @@ package combo
 
 import (
 	"context"
-	"regexp"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"omnicatalog/internal/config"
@@ -19,21 +20,21 @@ import (
 
 // ComboManager handles combo creation/management in OmniRoute and opencode.json generation
 type ComboManager struct {
-	client     *omniroute.Client
-	store      *store.Store
-	config     *config.Config
+	client *omniroute.Client
+	store  *store.Store
+	config *config.Config
 }
 
 // ComboCriteria defines the criteria for each combo
 type ComboCriteria struct {
-	ID                  string
-	Name                string
-	Description         string
+	ID                   string
+	Name                 string
+	Description          string
 	RequiredCapabilities []string
-	MinSpeedClass       string
-	MinContextWindow    int
-	Strategy            string
-	MaxModels           int
+	MinSpeedClass        string
+	MinContextWindow     int
+	Strategy             string
+	MaxModels            int
 }
 
 // Default combo criteria based on the plan
@@ -170,41 +171,45 @@ func (m *ComboManager) updateCombo(ctx context.Context, criteria ComboCriteria, 
 		targetIDs = append(targetIDs, c.ID)
 	}
 
-	// Create combo request
+	// Create combo request (OmniRoute format uses "models")
 	comboReq := omniroute.ComboRequest{
-		Name:        criteria.Name,
-		Strategy:    criteria.Strategy,
-		Targets:     make([]omniroute.ComboTarget, len(targetIDs)),
+		Name:        criteria.ID,
+		Strategy:    "priority",
+		Models:      make([]omniroute.ComboModel, len(targetIDs)),
 		Enabled:     true,
 		Description: criteria.Description,
 	}
 	for i, id := range targetIDs {
-		comboReq.Targets[i] = omniroute.ComboTarget{
-			Provider: extractProvider(id),
-			Model:    extractModel(id),
-			Weight:   1,
+		provider := extractProvider(id)
+		comboReq.Models[i] = omniroute.ComboModel{
+			ID:         fmt.Sprintf("%s-model-%d-%s", criteria.ID, i+1, slugify(id)),
+			Kind:       "model",
+			Model:      id,
+			ProviderID: provider,
+			Weight:     1,
 		}
 	}
 
-	// Update or create combo in OmniRoute
-	existingCombo, err := m.client.GetCombo(ctx, criteria.ID)
+	// Update or create combo in OmniRoute (lookup by name)
+	existingCombo, err := m.client.GetComboByName(ctx, criteria.ID)
 	if err != nil {
 		return fmt.Errorf("failed to check existing combo: %w", err)
 	}
 
 	if existingCombo != nil {
 		// Update existing
-		_, err = m.client.UpdateCombo(ctx, criteria.ID, comboReq)
+		_, err = m.client.UpdateCombo(ctx, existingCombo.ID, comboReq)
 		if err != nil {
 			return fmt.Errorf("failed to update combo: %w", err)
 		}
 		log.Info().Str("combo", criteria.ID).Msg("Updated existing combo in OmniRoute")
 	} else {
 		// Create new
-		_, err = m.client.CreateCombo(ctx, comboReq)
+		created, err := m.client.CreateCombo(ctx, comboReq)
 		if err != nil {
 			return fmt.Errorf("failed to create combo: %w", err)
 		}
+		existingCombo = created
 		log.Info().Str("combo", criteria.ID).Msg("Created new combo in OmniRoute")
 	}
 
@@ -251,7 +256,7 @@ func (m *ComboManager) filterModels(models []store.ValidatedModel, criteria Comb
 		}
 
 		// Check required capabilities
-		if !hasCapabilities(model.Capabilities, criteria.RequiredCapabilities) {
+		if !hasCapabilities(model, criteria.RequiredCapabilities) {
 			continue
 		}
 
@@ -277,17 +282,46 @@ func meetsSpeedClass(modelClass, minClass string) bool {
 	return modelSpeed >= minSpeed
 }
 
-// hasCapabilities checks if model has required capabilities
-func hasCapabilities(capabilities map[string]any, required []string) bool {
-	if capabilities == nil {
-		return false
-	}
+// hasCapabilities checks if model has required capabilities, inferring missing ones
+func hasCapabilities(model store.ValidatedModel, required []string) bool {
 	for _, cap := range required {
-		if val, ok := capabilities[cap]; !ok || val != true {
+		if !modelHasCapability(model, cap) {
 			return false
 		}
 	}
 	return true
+}
+
+// modelHasCapability reports whether a validated model satisfies a capability
+func modelHasCapability(model store.ValidatedModel, cap string) bool {
+	if val, ok := model.Capabilities[cap]; ok {
+		if b, ok := val.(bool); ok {
+			return b
+		}
+	}
+	switch cap {
+	case "tool_calling":
+		return model.SupportsTools
+	case "reasoning":
+		return model.SupportsReasoning
+	case "large_context":
+		if model.ContextWindow != nil {
+			return *model.ContextWindow >= 1000000
+		}
+		return false
+	case "code_generation", "structured_output", "schema_generation", "sql_generation":
+		return model.SupportsTools
+	case "code_analysis":
+		return model.SupportsReasoning || model.SupportsTools
+	case "writing":
+		if model.ContextWindow != nil {
+			return *model.ContextWindow >= 1000000
+		}
+		return false
+	case "vision":
+		return model.SupportsVision
+	}
+	return false
 }
 
 // sortCandidates sorts candidates by priority
@@ -332,6 +366,14 @@ func extractProvider(modelID string) string {
 		}
 	}
 	return "unknown"
+}
+
+// slugify converts a model id into a safe slug for combo model ids
+func slugify(modelID string) string {
+	s := strings.ReplaceAll(modelID, "/", "-")
+	s = strings.ReplaceAll(s, ":", "-")
+	s = strings.ReplaceAll(s, ".", "-")
+	return s
 }
 
 // extractModel extracts model name from model ID (provider/model)
@@ -389,7 +431,7 @@ func (m *ComboManager) generateOpenCodeConfig(ctx context.Context) error {
 				models[comboID] = map[string]any{
 					"name":     c.Description,
 					"provider": "omniroute",
-					"model":    "omniroute/" + comboID,
+					"model":    comboID,
 				}
 				break
 			}
@@ -401,8 +443,8 @@ func (m *ComboManager) generateOpenCodeConfig(ctx context.Context) error {
 		"provider": map[string]any{
 			"omniroute": map[string]any{
 				"options": map[string]any{
-					"baseURL":      m.config.OmniRoute.BaseURL,
-					"apiMode":      "chat",
+					"baseURL":       m.config.OmniRoute.BaseURL,
+					"apiMode":       "chat",
 					"refreshOnList": true,
 					"modelCacheTtl": 300000,
 				},
@@ -410,6 +452,17 @@ func (m *ComboManager) generateOpenCodeConfig(ctx context.Context) error {
 			},
 		},
 		"agents": agents,
+		"plugins": []map[string]any{
+			{
+				"package": "@omniroute/opencode-plugin-v2",
+				"options": map[string]any{
+					"providerId":          "omniroute",
+					"baseURL":             m.config.OmniRoute.BaseURL,
+					"visibleModels":       comboOrder,
+					"managementReadToken": m.config.OmniRoute.APIKey,
+				},
+			},
+		},
 	}
 
 	// Merge with existing config (preserve other settings)
@@ -470,6 +523,10 @@ func mergeConfigs(existing, newConfig map[string]any) map[string]any {
 	if newAgents, ok := newConfig["agents"].(map[string]any); ok {
 		result["agents"] = newAgents
 	}
+	// Override plugins (to propagate visibleModels etc.)
+	if newPlugins, ok := newConfig["plugins"]; ok {
+		result["plugins"] = newPlugins
+	}
 
 	// Merge provider.omniroute preserving models and other sub-keys
 	if newProvider, ok := newConfig["provider"].(map[string]any); ok {
@@ -484,7 +541,7 @@ func mergeConfigs(existing, newConfig map[string]any) map[string]any {
 					}
 					for k, v := range newOmni {
 						if k == "models" {
-							// Keep existing models (we manage agents via agents key)
+							mergedOmni["models"] = v
 						} else {
 							mergedOmni[k] = v
 						}

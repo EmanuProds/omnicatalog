@@ -329,7 +329,7 @@ scheduler:
 
 database:
   path: "$DATA_DIR/catalog.db"
-  migration_dir: "./migrations"
+  # migration_dir: ""  # empty = embedded migrations (recommended)
 
 logging:
   level: "info"

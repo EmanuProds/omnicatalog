@@ -4,12 +4,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
+
+	"omnicatalog/migrations"
 )
 
 // Store manages SQLite database access
@@ -37,11 +40,18 @@ func NewStore(dbPath, migrationDir string) (*Store, error) {
 
 	s := &Store{db: db}
 
-	// Auto-migration if directory provided
+	// Always migrate. An empty migration_dir (or one pointing at a missing
+	// directory, e.g. "./migrations" outside the repo checkout) falls back
+	// to the migrations embedded in the binary.
 	if migrationDir != "" {
-		if err := s.Migrate(migrationDir); err != nil {
-			return nil, fmt.Errorf("error running migrations: %w", err)
+		err := s.Migrate(migrationDir)
+		if err == nil {
+			return s, nil
 		}
+		fmt.Fprintf(os.Stderr, "warning: cannot use migration_dir %q (%v); falling back to embedded migrations\n", migrationDir, err)
+	}
+	if err := s.MigrateFS(migrations.FS); err != nil {
+		return nil, fmt.Errorf("error running migrations: %w", err)
 	}
 
 	return s, nil
@@ -57,7 +67,7 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// Migrate runs SQL migrations
+// Migrate runs SQL migrations from a directory on disk
 func (s *Store) Migrate(migrationDir string) error {
 	entries, err := os.ReadDir(migrationDir)
 	if err != nil {
@@ -74,17 +84,46 @@ func (s *Store) Migrate(migrationDir string) error {
 		if err != nil {
 			return fmt.Errorf("error reading migration %s: %w", entry.Name(), err)
 		}
+		if err := s.runMigration(entry.Name(), content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-		// Execute each statement separately (SQLite doesn't support multi-statement natively)
-		statements := splitStatements(string(content))
-		for _, stmt := range statements {
-			stmt = strings.TrimSpace(stmt)
-			if stmt == "" {
-				continue
-			}
-			if _, err := s.db.Exec(stmt); err != nil {
-				return fmt.Errorf("error executing migration %s: %w\nStatement: %s", entry.Name(), err, stmt[:min(200, len(stmt))])
-			}
+// MigrateFS runs SQL migrations from a filesystem (e.g. embedded migrations)
+func (s *Store) MigrateFS(fsys fs.FS) error {
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		return fmt.Errorf("error reading embedded migrations: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".sql" {
+			continue
+		}
+
+		content, err := fs.ReadFile(fsys, entry.Name())
+		if err != nil {
+			return fmt.Errorf("error reading embedded migration %s: %w", entry.Name(), err)
+		}
+		if err := s.runMigration(entry.Name(), content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) runMigration(name string, content []byte) error {
+	// Execute each statement separately (SQLite doesn't support multi-statement natively)
+	statements := splitStatements(string(content))
+	for _, stmt := range statements {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("error executing migration %s: %w\nStatement: %s", name, err, stmt[:min(200, len(stmt))])
 		}
 	}
 	return nil
@@ -774,6 +813,7 @@ type SchedulerRun struct {
 	StartedAt    string  `db:"started_at" json:"started_at"`
 	CompletedAt  *string `db:"completed_at" json:"completed_at,omitempty"`
 }
+
 // Settings (app-level key/value)
 func (s *Store) SetSetting(key, value string) error {
 	_, err := s.db.Exec(`

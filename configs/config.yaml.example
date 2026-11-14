@@ -49,7 +49,7 @@ scheduler:
 
 database:
   path: "~/.local/share/omnicatalog/catalog.db"
-  migration_dir: "./migrations"
+  migration_dir: ""  # empty = use embedded migrations
 
 logging:
   level: "info"                  # debug, info, warn, error

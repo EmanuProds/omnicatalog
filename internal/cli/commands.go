@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -60,7 +61,7 @@ func newSelectCommand(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "select",
 		Short: "Interactive model selection and combo management",
-		Long:  `Select models for validation and manage OpenCode combos.`, 
+		Long:  `Select models for validation and manage OpenCode combos.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runInteractiveSelection(cfg)
 		},
@@ -85,7 +86,7 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 			} else {
 				zerolog.SetGlobalLevel(zerolog.WarnLevel)
 			}
-			
+
 			log.Info().
 				Bool("dry_run", dryRun).
 				Bool("only_new", onlyNew).
@@ -471,14 +472,29 @@ func newCombosCommand(cfg *config.Config) *cobra.Command {
 			}
 
 			fmt.Println("=== Managed Combos ===")
+			if len(combos) == 0 {
+				fmt.Println("  No combos in local catalog yet. Run 'omnicatalog run' to discover, validate and create combos.")
+			}
 			for _, c := range combos {
 				enabled := "✅"
 				if !c.Enabled {
 					enabled = "⏸️"
 				}
-				fmt.Printf("  %s %s (%s) | Speed: %s | Context: %s | Models: %d + %d fallbacks\n",
-					enabled, c.ID, c.Name, c.MinSpeedClass, formatTokens(c.MinContextWindow),
-					len(c.TargetModelIDs), len(c.FallbackModelIDs))
+				fmt.Printf("  %s %s (%s) | Speed: %s | Context: %s | Strategy: %s\n",
+					enabled, c.ID, c.Name, c.MinSpeedClass, formatTokens(c.MinContextWindow), c.Strategy)
+
+				fmt.Printf("     Target models (%d):\n", len(c.TargetModelIDs))
+				for i, id := range c.TargetModelIDs {
+					fmt.Printf("       %d. %s\n", i+1, modelLabel(s, id))
+				}
+				fmt.Printf("     Fallback models (%d):\n", len(c.FallbackModelIDs))
+				for i, id := range c.FallbackModelIDs {
+					fmt.Printf("       %d. %s\n", i+1, modelLabel(s, id))
+				}
+				if len(c.RequiredCapabilities) > 0 {
+					fmt.Printf("     Required capabilities: %s\n", strings.Join(c.RequiredCapabilities, ", "))
+				}
+				fmt.Printf("     Updated at: %s\n", c.UpdatedAt)
 			}
 
 			if showDiff {
@@ -716,7 +732,7 @@ Examples:
   omnicatalog completion zsh > ~/.zsh/completions/_omnicatalog
   omnicatalog completion fish > ~/.config/fish/completions/omnicatalog.fish
 `,
-		Args: cobra.ExactArgs(1),
+		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			shell := args[0]
@@ -735,6 +751,19 @@ Examples:
 			}
 		},
 	}
+}
+
+// modelLabel returns "id (name)" when the model is known in the local catalog,
+// or just the id otherwise.
+func modelLabel(s *store.Store, id string) string {
+	m, err := s.GetModel(id)
+	if err != nil || m == nil {
+		return id
+	}
+	if m.Name != "" && m.Name != m.ID {
+		return fmt.Sprintf("%s (%s)", id, m.Name)
+	}
+	return id
 }
 
 func formatTokens(n int) string {
@@ -798,10 +827,10 @@ func runAutoSelection(cfg *config.Config) error {
 		return fmt.Errorf("sync failed: %w", err)
 	}
 
-	// Get models that are explicitly free (pricing=0 or :free suffix) AND support tools
+	// Get models that are explicitly free (pricing=0 or :free suffix) - don't filter by supports_tools yet
+	// (some models may not have supports_tools set correctly in DB yet)
 	filter := store.ModelFilter{
-		IsFree:        boolPtr(true),
-		SupportsTools: boolPtr(true),
+		IsFree: boolPtr(true),
 	}
 	models, err := storeInstance.GetModels(filter)
 	if err != nil {
@@ -826,24 +855,63 @@ func runAutoSelection(cfg *config.Config) error {
 			continue
 		}
 
-		// Only include API-compatible providers (skip CLI-based like aug, kilocode, etc.)
+		// Only include API-compatible providers with REAL models (skip CLI-based and combo providers)
 		apiCompatibleProviders := map[string]bool{
-			"openrouter":   true,
-			"groq":         true,
-			"gemini":       true,
-			"mistral":      true,
-			"openadapter":  true,
-			"opencode-zen": true,
-			"cloudflare-ai": true,
-			"nvidia":       true,
-			"huggingface":  true,
-			"bazaarlink":   true,
-			"poolside":     true,
+			"openrouter":            true,
+			"groq":                  true,
+			"gemini":                true,
+			"mistral":               true,
+			"openadapter":           true,
+			"opencode-zen":          true,
+			"cloudflare-ai":         true,
+			"nvidia":                true,
+			"huggingface":           true,
+			"bazaarlink":            true,
+			"poolside":              true,
+			"cloudflare-playground": true,
+			"codex-app-server":      true,
+			"devin-cli-agentic":     true,
+			"kiro":                  true,
 		}
-		if apiCompatibleProviders[m.ProviderID] && isExplicitFree {
+		if apiCompatibleProviders[m.ProviderID] && isExplicitFree && m.ProviderID != "combo" {
 			candidates = append(candidates, m)
 		}
 	}
+
+	// Sort by provider priority (reliable first) then context descending
+	providerPriority := map[string]int{
+		"openrouter":            100,
+		"groq":                  90,
+		"gemini":                80,
+		"mistral":               70,
+		"openadapter":           60,
+		"opencode-zen":          50,
+		"cloudflare-ai":         40,
+		"nvidia":                30,
+		"huggingface":           20,
+		"bazaarlink":            10,
+		"poolside":              10,
+		"cloudflare-playground": 10,
+		"codex-app-server":      10,
+		"devin-cli-agentic":     10,
+		"kiro":                  10,
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		pi := providerPriority[candidates[i].ProviderID]
+		pj := providerPriority[candidates[j].ProviderID]
+		if pi != pj {
+			return pi > pj
+		}
+		ci := 0
+		if candidates[i].ContextWindow != nil {
+			ci = *candidates[i].ContextWindow
+		}
+		cj := 0
+		if candidates[j].ContextWindow != nil {
+			cj = *candidates[j].ContextWindow
+		}
+		return ci > cj
+	})
 
 	// Limit to max 50 models for auto selection
 	if len(candidates) > 50 {
@@ -901,7 +969,6 @@ func runAutoSelection(cfg *config.Config) error {
 	fmt.Println("  Auto selection complete! Combos updated with explicitly free models.")
 	return nil
 }
-
 
 // runManualSelection - interactive provider/model selection
 
@@ -1202,6 +1269,5 @@ func runUpdateCombos(cfg *config.Config) error {
 	fmt.Println("Combos updated successfully!")
 	return nil
 }
-
 
 func boolPtr(b bool) *bool { return &b }

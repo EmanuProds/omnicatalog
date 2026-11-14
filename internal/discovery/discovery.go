@@ -14,11 +14,11 @@ import (
 
 // Discovery handles model discovery and synchronization
 type Discovery struct {
-	client          *omniroute.Client
-	store           *store.Store
-	config          *config.Config
-	selectedModels  map[string]bool
-	allModels       bool
+	client         *omniroute.Client
+	store          *store.Store
+	config         *config.Config
+	selectedModels map[string]bool
+	allModels      bool
 }
 
 // NewDiscovery creates a new discovery service
@@ -120,6 +120,27 @@ func (d *Discovery) SyncModels(ctx context.Context) error {
 			isFree = true // Explicitly free
 		}
 
+		// Preserve previously confirmed free tier and capability flags across syncs
+		freeConfirmed := false
+		supportsTools := m.SupportsTools()
+		supportsVision := m.SupportsVision()
+		supportsReasoning := m.SupportsReasoning()
+		if existing, _ := d.store.GetModel(m.ID); existing != nil {
+			freeConfirmed = existing.FreeConfirmed
+			if existing.IsFree {
+				isFree = true
+			}
+			if existing.SupportsTools {
+				supportsTools = true
+			}
+			if existing.SupportsVision {
+				supportsVision = true
+			}
+			if existing.SupportsReasoning {
+				supportsReasoning = true
+			}
+		}
+
 		providerID := m.OwnedBy
 		if providerID == "" {
 			// Try to extract from model ID (provider/model)
@@ -165,16 +186,34 @@ func (d *Discovery) SyncModels(ctx context.Context) error {
 			Name:              m.OwnedBy + "/" + m.ID,
 			ContextWindow:     &ctxWindow,
 			MaxOutputTokens:   &maxOutTokens,
-			SupportsTools:     m.SupportsTools(),
-			SupportsVision:    m.SupportsVision(),
-			SupportsReasoning: m.SupportsReasoning(),
+			SupportsTools:     supportsTools,
+			SupportsVision:    supportsVision,
+			SupportsReasoning: supportsReasoning,
 			PricingInput:      &pricingInput,
 			PricingOutput:     &pricingOutput,
 			IsFree:            isFree,
-			FreeConfirmed:     false, // Will be confirmed by free tier validation
-			FreeTestedAt:      func() *string { if isFree { t := time.Now().Format(time.RFC3339); return &t } else { return nil } }(),
-			Capabilities:      map[string]any{"vision": m.SupportsVision(), "tool_calling": m.SupportsTools(), "reasoning": m.SupportsReasoning()},
-			DiscoveredAt:      time.Now().Format(time.RFC3339),
+			FreeConfirmed:     freeConfirmed, // Preserved across syncs
+			FreeTestedAt: func() *string {
+				if isFree {
+					t := time.Now().Format(time.RFC3339)
+					return &t
+				} else {
+					return nil
+				}
+			}(),
+			Capabilities: map[string]any{
+				"vision":            supportsVision,
+				"tool_calling":      supportsTools,
+				"reasoning":         supportsReasoning,
+				"large_context":     m.ContextWindow() >= 1000000,
+				"code_generation":   supportsTools,
+				"code_analysis":     supportsReasoning || supportsTools,
+				"structured_output": supportsTools,
+				"schema_generation": supportsTools,
+				"sql_generation":    supportsTools,
+				"writing":           m.ContextWindow() >= 1000000,
+			},
+			DiscoveredAt: time.Now().Format(time.RFC3339),
 		}
 
 		if err := d.store.UpsertModel(model); err != nil {
@@ -228,8 +267,8 @@ func (d *Discovery) GetModelsForFreeValidation(ctx context.Context) ([]store.Mod
 // GetModelsForToolCallingValidation returns models that passed free validation but need tool calling validation
 func (d *Discovery) GetModelsForToolCallingValidation(ctx context.Context) ([]store.Model, error) {
 	filter := store.ModelFilter{
-		FreeConfirmed:  boolPtr(true),
-		SupportsTools:  boolPtr(true),
+		FreeConfirmed: boolPtr(true),
+		SupportsTools: boolPtr(true),
 	}
 	models, err := d.store.GetModels(filter)
 	if err != nil {
