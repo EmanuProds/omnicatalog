@@ -3,6 +3,7 @@ package validation
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -198,11 +199,15 @@ func (v *ContextValidator) testContextSize(ctx context.Context, modelID string, 
 	// Create a request with approximately 'tokens' worth of input
 	// We'll create a message with repeated content to reach the token count
 	// Roughly 4 chars per token, so we need ~4*tokens characters
+	// Build the probe payload with a Builder: repeated string += in a loop
+	// is quadratic and made large probes (8x+ start) effectively hang.
 	charCount := tokens * 4
-	content := ""
-	for i := 0; i < charCount/20; i++ {
-		content += "This is a test message to fill context window. "
+	var sb strings.Builder
+	sb.Grow(charCount)
+	for i := 0; i < charCount/48; i++ {
+		sb.WriteString("This is a test message to fill context window. ")
 	}
+	content := sb.String()
 
 	reqBody := map[string]any{
 		"model": modelID,

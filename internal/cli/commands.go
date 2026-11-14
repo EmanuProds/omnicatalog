@@ -40,7 +40,6 @@ func NewRootCommand(cfg *config.Config, version, commit, buildDate string) *cobr
 	// Global flags
 	rootCmd.PersistentFlags().String("config", "", "Path to config file (default: auto-detect)")
 
-
 	// Subcommands
 	rootCmd.AddCommand(newRunCommand(cfg))
 	rootCmd.AddCommand(newSelectCommand(cfg))

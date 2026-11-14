@@ -147,11 +147,14 @@ func (s *Scheduler) runPipeline() {
 		Status:    "running",
 		StartedAt: time.Now().Format(time.RFC3339),
 	}
-	_, err := s.store.CreateSchedulerRun(run)
+	// Create scheduler run record; keep the ID so the deferred completion
+	// update can mark the right row.
+	runID, err := s.store.CreateSchedulerRun(run)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to create scheduler run record")
 		return
 	}
+	run.ID = runID
 
 	startTime := time.Now()
 	modelsTested := 0

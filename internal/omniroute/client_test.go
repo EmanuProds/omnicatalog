@@ -212,16 +212,18 @@ func TestClient_GetCombos(t *testing.T) {
 			return
 		}
 
+		// Real shape of OmniRoute's GET /api/combos
 		response := map[string]any{
-			"object": "list",
-			"data": []map[string]any{
+			"combos": []map[string]any{
 				{
 					"id":          "orchestrate",
-					"name":        "Orchestrate Combo",
+					"name":        "orchestrate",
 					"description": "Reasoning, planning, architecture",
-					"strategy":    "auto",
-					"targets": []map[string]any{
-						{"provider": "anthropic", "model": "claude-sonnet-4-6", "weight": 1},
+					"strategy":    "priority",
+					"models": []map[string]any{
+						{"id": "orchestrate-model-1", "kind": "model",
+							"model":      "anthropic/claude-sonnet-4-6",
+							"providerId": "anthropic", "weight": 1},
 					},
 					"enabled":    true,
 					"created_at": time.Now().Format(time.RFC3339),

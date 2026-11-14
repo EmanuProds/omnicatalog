@@ -51,7 +51,7 @@ func setupScheduler(t *testing.T) (*Scheduler, *store.Store, *omniroute.Client, 
 							"id":                "test/model-1",
 							"object":            "model",
 							"owned_by":          "test",
-							"context_window":    200000,
+							"context_length":    200000,
 							"max_output_tokens": 8192,
 							"supports_tools":    true,
 							"pricing":           map[string]any{"input": 0, "output": 0},
@@ -148,7 +148,7 @@ func setupScheduler(t *testing.T) (*Scheduler, *store.Store, *omniroute.Client, 
 							"id":                 "test/model-1",
 							"provider":           "test",
 							"name":               "Test Model",
-							"context_window":     200000,
+							"context_length":     200000,
 							"max_output_tokens":  8192,
 							"supports_tools":     true,
 							"supports_vision":    false,
@@ -166,7 +166,6 @@ func setupScheduler(t *testing.T) (*Scheduler, *store.Store, *omniroute.Client, 
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
-	defer server.Close()
 
 	cfg := &config.Config{
 		OmniRoute: config.OmniRouteConfig{
@@ -208,7 +207,7 @@ func setupScheduler(t *testing.T) (*Scheduler, *store.Store, *omniroute.Client, 
 			CatalogStaleDays:       14,
 		},
 		Scheduler: config.SchedulerConfig{
-			Enabled:      false, // Disable cron for this test
+			Enabled:      true, // enabled so cron entries exist for GetNextRun
 			Schedule:     "custom",
 			CustomCron:   "@every 1h",
 			RunOnStartup: false,
@@ -290,6 +289,7 @@ func TestScheduler_RunPipeline(t *testing.T) {
 		SupportsTools: true,
 		IsFree:        true,
 		FreeConfirmed: true,
+		FreeSource:    "connection",
 		Capabilities:  map[string]any{"tool_calling": true, "reasoning": true, "large_context": true},
 	})
 	s.SaveBenchmark(&store.Benchmark{
