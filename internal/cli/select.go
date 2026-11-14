@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -9,6 +10,10 @@ import (
 	"syscall"
 	"unsafe"
 )
+
+// errSelectionCancelled is returned when the user cancels a multiselect
+// with 'q'. Callers must abort their flow instead of "selecting all".
+var errSelectionCancelled = errors.New("selection cancelled")
 
 // SelectItem represents an entry in a multiselect.
 type SelectItem struct {
@@ -48,6 +53,7 @@ func restoreMode(fd int, t syscall.Termios) {
 }
 
 // Multiselect displays items and lets the user toggle with space and confirm with enter.
+// Pressing 'q' cancels with errSelectionCancelled; callers are expected to abort their flow.
 func Multiselect(title string, items []SelectItem) ([]SelectItem, error) {
 	if !termIsTerminal(os.Stdin) || !termIsTerminal(os.Stdout) {
 		return numberedMultiselect(title, items)
@@ -73,6 +79,9 @@ func numberedMultiselect(title string, items []SelectItem) ([]SelectItem, error)
 		line = strings.TrimSpace(line)
 		if line == "done" || line == "" {
 			break
+		}
+		if line == "q" || line == "Q" || strings.EqualFold(line, "cancel") {
+			return nil, errSelectionCancelled
 		}
 		if line == "a" || line == "all" {
 			all := true
@@ -186,8 +195,7 @@ func terminalMultiselect(title string, items []SelectItem) ([]SelectItem, error)
 		}
 		b := buf[0]
 		if b == 'q' || b == 'Q' {
-			// cancel -> keep original? return none? We'll return all false? Instead restore and return error.
-			return nil, fmt.Errorf("cancelled")
+			return nil, errSelectionCancelled
 		}
 		if b == '\r' || b == '\n' {
 			break

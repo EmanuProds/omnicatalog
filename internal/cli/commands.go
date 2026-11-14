@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -25,6 +26,11 @@ import (
 	"omnicatalog/internal/store"
 	"omnicatalog/internal/validation"
 )
+
+// isSelectionCancelled reports whether err is a user cancellation of a multiselect prompt.
+func isSelectionCancelled(err error) bool {
+	return errors.Is(err, errSelectionCancelled)
+}
 
 func NewRootCommand(cfg *config.Config, version, commit, buildDate string) *cobra.Command {
 	rootCmd := &cobra.Command{
@@ -170,9 +176,14 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 
 				selProviders, err := Multiselect("Select providers to test", providerItems)
 				if err != nil {
-					log.Warn().Err(err).Msg("Selection cancelled, testing all providers")
-					testAll = true
-				} else {
+					if isSelectionCancelled(err) {
+						fmt.Println("Selection cancelled. No tests were run.")
+						return nil
+					}
+					return fmt.Errorf("selection failed: %w", err)
+				}
+				{
+
 					var selectedProviderSlugs []string
 					for _, it := range selProviders {
 						if it.Selected {
@@ -203,11 +214,11 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 						}
 						selModels, err := Multiselect(fmt.Sprintf("Select models for %s", slug), modelItems)
 						if err != nil {
-							// on cancel, select all for this provider
-							for _, m := range mods {
-								selectedModelIDs = append(selectedModelIDs, m.ID)
+							if isSelectionCancelled(err) {
+								fmt.Println("Selection cancelled. No tests were run.")
+								return nil
 							}
-							continue
+							return fmt.Errorf("selection failed: %w", err)
 						}
 						for _, it := range selModels {
 							if it.Selected {
@@ -1020,7 +1031,11 @@ func runManualSelection(cfg *config.Config) error {
 	// Provider selection
 	selProviders, err := Multiselect("Select providers for manual combo selection", providerItems)
 	if err != nil {
-		return err
+		if isSelectionCancelled(err) {
+			fmt.Println("Selection cancelled.")
+			return nil
+		}
+		return fmt.Errorf("selection failed: %w", err)
 	}
 
 	var selectedProviderSlugs []string
@@ -1049,11 +1064,11 @@ func runManualSelection(cfg *config.Config) error {
 		}
 		selModels, err := Multiselect(fmt.Sprintf("Select models for %s", slug), modelItems)
 		if err != nil {
-			// on cancel, select all for this provider
-			for _, m := range mods {
-				selectedModelIDs = append(selectedModelIDs, m.ID)
+			if isSelectionCancelled(err) {
+				fmt.Println("Selection cancelled.")
+				return nil
 			}
-			continue
+			return fmt.Errorf("selection failed: %w", err)
 		}
 		for _, it := range selModels {
 			if it.Selected {
@@ -1167,7 +1182,11 @@ func runDebugSelection(cfg *config.Config) error {
 
 	selProviders, err := Multiselect("Select providers to debug test", providerItems)
 	if err != nil {
-		return err
+		if isSelectionCancelled(err) {
+			fmt.Println("Selection cancelled.")
+			return nil
+		}
+		return fmt.Errorf("selection failed: %w", err)
 	}
 
 	var selectedModelIDs []string
