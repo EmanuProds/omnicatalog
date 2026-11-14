@@ -1,6 +1,6 @@
 # OmniCatalog
 
-OmniRoute Model Validator for OpenCode — Discovers, validates, and catalogs **free** models with **tool calling** from OmniRoute, automatically updating **combos** in OpenCode.
+OmniRoute Model Validator for OpenCode — Discovers, validates, and catalogs free models from OmniRoute, automatically updating **combos** in OpenCode. It automates the full manual setup: discovery → free-model classification → validation of admitted free models → combo assembly by family rules → publish combos and wire `opencode.json`, including verifying and installing `@omniroute/opencode-plugin-v2`. See [PLAN.md](PLAN.md) for the full design (v2).
 
 ## Objective
 

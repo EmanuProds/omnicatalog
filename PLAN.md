@@ -1,646 +1,277 @@
-# Plan: OmniRoute Model Validator for OpenCode
+# Plan: OmniCatalog — Automated OmniRoute → OpenCode Setup
 
-> **Status note (2026-11-14)**: The free-model validation described in §1
-> ("Providers Needing Free Tier Validation" — 30s window, `billing_check`
-> probing) was replaced by **deterministic classification against OmniRoute's
-> documented free-tier catalog** (`/api/free-tier/summary`) as of the
-> OmniRoute v3.8.53 upgrade. Free admission = documented catalog
-> (recurring/* + keyless) or `importFreeModelsOnly=true` connections.
-> Inferred free (pricing "0" / `:free` suffix) is cataloged but excluded
-> from combos. See README "Free-model classification" and
-> `migrations/003_free_catalog.sql`. Sections describing probes of paid
-> models for billing detection are obsolete.
-
-## Overview
-A **Go** program executed as a **systemd service** on Linux that:
-1. Queries OmniRoute API to discover configured providers and their models
-2. Filters **free** models with **tool calling** support
-3. Validates functionality via **quick test (direct API)** + **real test (opencode run)**
-4. Measures **speed/latency** of models
-5. Stores validated catalog in **SQLite**
-6. Updates **OpenCode agents/combos** (opencode.json) based on model capabilities
+> **Status (v2, 2026-11-14)** — Rewritten for the stated purpose: **do automatically
+> what the user used to do manually in OmniRoute + OpenCode.**
+> The previous plan (discovery → tool/context/speed validation → combos) described a
+> validator. v2 extends it into a full product: discover → classify free models →
+> validate admitted free models → assemble combos by family catalog + quota rules →
+> write combos to OmniRoute → own `opencode.json` completely, including installing and
+> configuring `@omniroute/opencode-plugin-v2`. Old content (probe-based free
+> validation, dry-run, manual multiselect) is in git history; `--dry-run` was removed.
 
 ---
 
-## Architecture
+## 1. Purpose & scope
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    omnicatalog (Go binary)                      │
-├─────────────────────────────────────────────────────────────────┤
-│  CLI (cobra)                                                    │
-│  ├── run           # Executes full validation (manual/cron)     │
-│  ├── daemon        # systemd service mode (resident)            │
-│  ├── status        # Shows last run status                      │
-│  ├── models        # Lists models in local catalog              │
-│  └── combos        # Shows/updates combos in opencode.json     │
-├─────────────────────────────────────────────────────────────────┤
-│  Core Services                                                  │
-│  ├── OmniRouteClient    # HTTP client for OmniRoute API         │
-│  ├── ModelValidator     # Direct API + opencode validation      │
-│  ├── SpeedTester        # Latency/throughput benchmark          │
-│  ├── CatalogStore       # SQLite (models, providers, combos)    │
-│  ├── ComboManager       # Updates opencode.json agents          │
-│  └── Scheduler          # Scheduling (daily/weekly/custom)      │
-└─────────────────────────────────────────────────────────────────┘
-```
+OmniCatalog automates the whole path from a fresh OmniRoute install to a fully
+wired OpenCode:
+
+1. **What models exist?** — discovery via the OmniRoute API (providers, connections,
+   models). Saved to SQLite: free ones (admitted) and paid ones (priced, read-only).
+2. **Which are free?** — models OmniRoute flags as free/zero-cost, using the
+   documented free-tier catalog (`/api/free-tier/summary`) + provider inference, and
+   its documented signals only. **No probes are ever sent to paid models.**
+3. **Are they real?** — only *admitted* free models are validated
+   (tool calling → context window → speed benchmark).
+4. **Which go where?** — admitted free models are assembled into the six combos
+   according to per-combo family/model rules (a YAML catalog: which families/models
+   belong to which combo, given strengths and weaknesses) plus quota rules (provider
+   accounts → distinct models admitted).
+5. **Are combos published to OpenCode?** — OmniCatalog writes the combos into
+   OmniRoute and **owns the whole `opencode.json`** (provider block, agents, plugin).
+6. **Does OpenCode see the combos?** — OmniCatalog verifies (and installs/configures
+   if needed) `@omniroute/opencode-plugin-v2`, ensuring OpenCode lists exactly the
+   combos.
+
+Not in scope:
+
+- Probing paid models (cost, TOS).
+- Managing OpenCode sessions/state beyond `opencode.json`.
+- Paid-model validation (they are cataloged only).
+- `omnicatalog run --dry-run` (removed).
 
 ---
 
-## 1. Provider & Model Discovery (OmniRoute API)
+## 2. Execution flow (`omnicatalog run`)
 
-### Endpoints Used
+```
+PHASE 1  Discovery   providers + connections (accounts, quota signals) + models
+PHASE 2  Classify    documented free catalog per sync; persist models (free+paid)
+PHASE 3  Validate    admitted free ONLY: tool_calling → context → speed benchmark
+PHASE 4  Assign      quota + family catalog → models per combo (≥1 per combo)
+PHASE 5  Publish     upsert combos in OmniRoute (atomic, ordered fallbacks)
+PHASE 6  opencode.json  provider + agents + plugin block (backup, merge-preserve)
+PHASE 7  Plugin      verify/install/update @omniroute/opencode-plugin-v2,
+                      ensure visibleModels == the combos; auto-fix config if wrong
+PHASE 8  Report      summary of everything (validated, combos, plugin state)
+```
+
+Plugin phase runs **last**, after combos and the file are written
+(see §7 failure policy: interactive ask, non-TTY warn-and-continue).
+
+---
+
+## 3. Discovery & storage
+
+### Endpoints
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /api/providers` | Lists configured providers (with connection status) |
-| `GET /api/v1/models` | Lists all models available in configured providers |
-| `POST /api/v1/models/query` | Filters models by capability (tool_calling, vision, etc) |
-| `GET /api/combos` | Lists existing combos in OmniRoute (reference) |
-| `GET /api/models/catalog` | Full catalog with metadata (pricing, capabilities) |
+| `GET /api/providers` | connections (accounts, `importFreeModelsOnly`, health/testStatus) |
+| `GET /api/v1/models` | model list (4,900+ today, context, pricing, capabilities) |
+| `GET /api/free-tier/summary` | documented free catalog (485 entries, `freeType`) |
+| `GET /api/pricing/models` | provider aliases ↔ canonical slugs (match normalization) |
 
-### Initial Filters (before testing)
-- **Free**: `pricing.input == 0 && pricing.output == 0` OR provider marked as "free tier" in catalog
-- **Tool Calling**: `capabilities.tool_calling == true` OR `supportsTools == true`
-- **Exclude**: deprecated models, duplicate aliases, reasoning-only models without tools
+### Stored rows (models)
+- `supports_tools`, `context_window`, `pricing_input/output`, `capabilities` (all synced models)
+- `is_free`, `free_source` (`documented`|`connection`|`inferred`), `free_type`,
+  `pool_key`, `free_catalog_updated_at` (migration 003/004)
+- paid models stored with pricing, **never probed**
+- sync filter **kept**: tool_calling + min context only; paid models without tools are
+  not stored; combos form from admitted free ones.
 
-### Providers with Explicit Free Tier (No Free Test Needed)
-These **DO NOT need free tier testing**, only tool calling + speed + context:
-- Providers with `free: true` in catalog
-- Models with `pricing: { input: 0, output: 0 }` confirmed
-- Known examples: Groq (free models), Cerebras, some Google/Gemini, "keyless" providers
-
-### Providers Needing Free Tier Validation
-- OpenRouter (rotating "free" models)
-- Together AI (limited free tier)
-- Fireworks AI
-- Any provider without explicit pricing in catalog
-
-### Free Tier Validation (Non-Explicit Providers)
-For providers that **don't** explicitly indicate free tier:
-- **30s window per provider**: Test models from SAME provider sequentially within 30s
-- **Parallelism across providers**: Models from DIFFERENT providers can be validated simultaneously
-- **Method**: Real API request + billing/usage verification (headers, response metadata, or quota endpoint)
-- **Cache**: Free tier result cached 24h per model
+### Free classification (kept as designed in v3.8.53 work)
+- `documented`: match in free-tier catalog, `freeType ∈ {recurring-daily,
+  recurring-monthly, recurring-uncapped, recurring-credit, keyless}` → admitted
+  (probes + combos).
+- `connection`: connection with `importFreeModelsOnly=true` → admitted.
+- `inferred`: pricing `"0"` (either upstream shape) or `:free`/`-free` id suffix →
+  cataloged, labeled `(free, inferred)`, **never admitted** (unless `inferred_in_combos`).
+- `one-time-initial` / `discontinued` → cataloged, not admitted.
+- Catalog outage at sync → previous classification preserved (fail closed).
+- Catalog stale (`catalog_stale_days`, default 14) → `WARN`.
+- **Paid models: cataloged, never probed.**
 
 ---
 
-## 2. Tool Calling Validation
+## 4. Combo assembly
 
-### Phase 1: Quick Test (Direct API) - ~2-5s per model
-```json
-POST /v1/chat/completions
-{
-  "model": "provider/model-id",
-  "messages": [{"role": "user", "content": "Use a tool to list files in current directory"}],
-  "tools": [{
-    "type": "function",
-    "function": {
-      "name": "list_files",
-      "description": "List files in a directory",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "path": {"type": "string", "description": "Directory path"}
-        },
-        "required": ["path"]
-      }
-    }
-  }],
-  "tool_choice": "auto",
-  "max_tokens": 100
-}
-```
-**Success Criteria**: Response contains `tool_calls` array with `name: "list_files"` and valid arguments.
+### The six combos (unchanged)
 
-### Phase 2: Real Test (opencode run) - ~15-30s per model
-```bash
-# Creates task requiring tool usage
-opencode run --model "provider/model-id" \
-  "List all .go files in the current directory using the glob tool, then read the first one using the read tool"
-```
-**Success Criteria**:
-- Subagent executes `glob` and `read` tools
-- Returns coherent result
-- No "model does not support tool calling" errors
+| Combo | Focus | Min context | Min speed | Required capabilities |
+|-------|-------|-------------|-----------|-----------------------|
+| `orchestrate` | reasoning, planning, architecture, delegation | **1M** | Normal | reasoning, tool_calling, large_context |
+| `code` | speed, modern code | **200k** | **Ultra** | tool_calling |
+| `review` | bugs, fix planning, architecture | **1M** | Fast | reasoning, tool_calling |
+| `contracts` | API contracts (OpenAPI, Orval) | **200k** | Fast | tool_calling, structured_output |
+| `database` | SQL/NoSQL, migrations | **200k** | Normal | tool_calling |
+| `docs` | docs, READMEs, PRs | **1M** | Slow | tool_calling |
 
-### Optimization
-- Parallelize tests (max 3-5 concurrent to avoid API saturation)
-- Cache results (SQLite) - don't re-test models validated in last 24h
-- Timeout: 30s direct API, 60s opencode run
+### Model catalog — `combos.yaml` (repo, versioned, embedded)
 
----
+Located at `configs/combos.yaml`, embedded into the binary, overridable via
+config (`combos.catalog_file`). Structure per combo:
 
-## 3. Speed Test (Benchmark)
-
-### Metrics Collected
-| Metric | Description | Acceptable Target |
-|--------|-------------|-------------------|
-| `ttft_ms` | Time To First Token (streaming) | < 3000ms |
-| `tps` | Tokens Per Second (sustained) | > 20 tps |
-| `total_ms` | Total latency simple request | < 10000ms |
-| `tool_latency_ms` | Tool call latency | < 5000ms |
-
-### Methodology
-1. **Warm-up**: 1 discarded request (loads model at provider)
-2. **TTFT**: 3 streaming requests, measure time to first chunk
-3. **Throughput**: 1 request 500 tokens, measure tokens/second
-4. **Tool Calling**: 1 request with tool, measure tool_call → tool_result latency
-
-### Speed Classification
-| Class | TTFT | TPS | Recommended Use |
-|-------|------|-----|-----------------|
-| **Ultra** | < 500ms | > 50 | code |
-| **Fast** | 500-1500ms | 30-50 | review, contracts |
-| **Normal** | 1500-3000ms | 20-30 | orchestrate, database |
-| **Slow** | > 3000ms | < 20 | docs |
-| **Rejected** | > 5000ms | < 10 | Fallback only |
-
----
-
-## 4. SQLite Catalog (Schema)
-
-```sql
--- Providers configured in OmniRoute
-CREATE TABLE providers (
-    id TEXT PRIMARY KEY,           -- ex: "anthropic", "openai", "groq"
-    name TEXT NOT NULL,
-    status TEXT NOT NULL,          -- "connected", "error", "disabled"
-    free_tier BOOLEAN DEFAULT 0,   -- provider has known free tier
-    last_checked DATETIME,
-    metadata JSON                  -- complete provider config
-);
-
--- Discovered models
-CREATE TABLE models (
-    id TEXT PRIMARY KEY,           -- ex: "anthropic/claude-sonnet-4-6"
-    provider_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    context_window INTEGER,        -- max context in tokens (validated)
-    max_output_tokens INTEGER,
-    supports_tools BOOLEAN DEFAULT 0,
-    supports_vision BOOLEAN DEFAULT 0,
-    supports_reasoning BOOLEAN DEFAULT 0,
-    pricing_input REAL,            -- USD per 1M tokens (0 = free)
-    pricing_output REAL,
-    is_free BOOLEAN DEFAULT 0,     -- confirmed free
-    free_confirmed BOOLEAN DEFAULT 0, -- validated by test
-    free_tested_at DATETIME,       -- when free tier was tested
-    capabilities JSON,             -- complete capabilities from OmniRoute
-    discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (provider_id) REFERENCES providers(id)
-);
-
--- Validation results
-CREATE TABLE validations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    model_id TEXT NOT NULL,
-    validation_type TEXT NOT NULL, -- "api_tool_call", "opencode_tool_call", "speed"
-    status TEXT NOT NULL,          -- "passed", "failed", "timeout", "error"
-    details JSON,                  -- latency, tokens, error, etc
-    tested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (model_id) REFERENCES models(id)
-);
-
--- Speed benchmarks
-CREATE TABLE benchmarks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    model_id TEXT NOT NULL,
-    ttft_ms INTEGER,
-    tps REAL,
-    total_ms INTEGER,
-    tool_latency_ms INTEGER,
-    speed_class TEXT,              -- "ultra", "fast", "normal", "slow"
-    benchmarked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (model_id) REFERENCES models(id)
-);
-
--- OpenCode combos managed
-CREATE TABLE opencode_combos (
-    id TEXT PRIMARY KEY,           -- ex: "orchestrate", "code", "review"
-    name TEXT NOT NULL,
-    description TEXT,
-    target_model_ids JSON,         -- array of primary models ordered
-    fallback_model_ids JSON,       -- array of fallbacks ordered
-    required_capabilities JSON,    -- ["reasoning", "tool_calling", "large_context"]
-    min_speed_class TEXT,          -- "fast", "normal", etc
-    min_context_window INTEGER,    -- minimum context in tokens
-    strategy TEXT DEFAULT 'auto',  -- OmniRoute routing strategy
-    enabled BOOLEAN DEFAULT 1,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- Scheduler run log
-CREATE TABLE scheduler_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_type TEXT NOT NULL,        -- "manual", "scheduled", "triggered"
-    status TEXT NOT NULL,          -- "running", "completed", "failed"
-    models_tested INTEGER DEFAULT 0,
-    models_passed INTEGER DEFAULT 0,
-    models_failed INTEGER DEFAULT 0,
-    duration_ms INTEGER,
-    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    completed_at DATETIME
-);
+```yaml
+combos:
+  orchestrate:
+    prefer:                 # ordered family globs on the model id
+      - "nvidia/nemotron-*"
+      - "*/deepseek-*"
+      - "*/kimi-*"
+    require: [reasoning, tool_calling, large_context]
+  code:
+    prefer:
+      - "*/deepseek-*"
+      - "*/step-*"
+      - "*/qwen*-coder-*"
+    require: [tool_calling]
 ```
 
+- Matching: glob on the full `provider/model` id.
+- The catalog is the **constraint**: only models whose family is listed for the
+  combo can be assigned to it. Speed/context/tool probes remain **gates**.
+- `require`: extra capabilities beyond the combo defaults (all must hold).
+- The catalog content will ship with a first cut based on the current free catalog
+  (families: Nemotron-Ultra/Super, Qwen3-Coder/Flash, DeepSeek, GPT-OSS, Kimi,
+  GLM, Gemma, Devstral, Step, etc.) and be iterated by feedback.
+
+### Rules & assignment
+
+1. **Quota per provider** — `2 × (# connections with credentials)` distinct models
+   per provider enter the pool, spread across combos. Reasoning-heavy families go to
+   `orchestrate` first; fast/specialized go to the other combos.
+2. **Combo eligibility** — model must be: free admitted (`documented`/`connection`),
+   tool_calling passed, context ≥ combo min, speed ≥ combo min, family in combo's
+   catalog.
+3. **Ordering** — speed class (`ultra > fast > normal > slow`) → context window →
+   catalog preference.
+4. **Repetition** — `orchestrate` models may also appear in the other combos
+   (reasoning-specialized work is expected to repeat); beyond that, avoid excess
+   repetition between combos.
+5. **Empty combo** — if no eligible model passes catalog + gates, the combo is
+   **marked failed**; the rest of the run proceeds. Run reports a non-zero exit with
+   the failing combos listed.
+6. **≥1 model per combo** — otherwise the combo fails (see 5).
+
+Upsert combos into OmniRoute with ordered fallbacks (`schema: priority`),
+exactly like today's combo.go.
+
 ---
 
-## 5. Combo Mapping → Selection Criteria
+## 5. `opencode.json` management (OmniCatalog owns it)
 
-### 6 Combo Definitions (OpenCode Agents)
+OmniCatalog writes the Global config with merge-preserve of unknown keys, atomic
+write, automatic backup (`*.bak-<ts>`):
 
-| Combo (Agent ID) | Primary Focus | Required Capabilities | Min Speed | Min Context | Ideal Model |
-|------------------|---------------|----------------------|-----------|-------------|-------------|
-| **orchestrate** | Reasoning, planning, architecture, delegation | `reasoning`, `tool_calling`, `large_context` (≥1M) | Normal | **1M tokens** | Strong "thinking" models: Claude Sonnet, GPT-5, Kimi K2, Nemotron 3 Ultra |
-| **code** | Speed, modern code creation/update, minimal errors | `tool_calling`, `code_generation` | Ultra | **200k tokens** | Fast code models: GPT-4o-mini, Claude Haiku, Gemini Flash, DeepSeek Coder |
-| **review** | Bugs, fix planning, code/architecture evaluation | `reasoning`, `tool_calling`, `code_analysis` | Fast | **1M tokens** | Similar to orchestrate, analysis-focused: GPT-5, Claude Opus, Kimi |
-| **contracts** | API contracts (OpenAPI, Orval), frontend↔backend | `tool_calling`, `structured_output`, `schema_generation` | Fast | **200k tokens** | JSON/Schema specialists: GPT-4o, Claude Sonnet, Gemini Pro |
-| **database** | Cloud DB, SQL, NoSQL, migrations, optimization | `tool_calling`, `sql_generation`, `code_generation` | Normal | **200k tokens** | Specialized: SQLCoder, CodeLlama, or strong generalists |
-| **docs** | Read/create documentation, PRs, READMEs | `tool_calling`, `large_context`, `writing` | Slow | **1M tokens** | Strong writers: Claude Sonnet, GPT-4o, Gemini Pro |
-
-### Assignment Strategy
-1. **Primary Model**: Best model meeting ALL required criteria + min speed
-2. **Fallbacks (3-5)**: Ordered by criteria proximity, speed, availability
-3. **OmniRoute Auto-combo**: Optional - create "auto" combo in OmniRoute with selected models
-
-### Example Generated opencode.json
 ```jsonc
 {
-  "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "omniroute": {
-      "options": {
-        "baseURL": "http://localhost:20128/v1",
-        "apiMode": "chat"
-      }
-    }
-  },
-  "agents": {
-    "orchestrate": {
-      "description": "Orchestration, planning, architecture, delegation (1M+ context)",
-      "mode": "primary",
-      "model": "omniroute/orchestrate",
-      "system": "You are the orchestrator agent. Plan, architect, and delegate tasks to specialized subagents."
-    },
-    "code": {
-      "description": "Modern code creation/update, high speed (200k+ context)",
-      "mode": "primary",
-      "model": "omniroute/code",
-      "system": "You are a senior software engineer. Write clean, modern, testable code with minimal errors. Prioritize speed."
-    },
-    "review": {
-      "description": "Code review, bug hunting, architecture evaluation (1M+ context)",
-      "mode": "subagent",
-      "model": "omniroute/review",
-      "system": "You are a senior code reviewer. Find bugs, vulnerabilities, architecture issues and suggest concrete fixes."
-    },
-    "contracts": {
-      "description": "API contracts (OpenAPI, Orval), frontend-backend integration (200k+ context)",
-      "mode": "subagent",
-      "model": "omniroute/contracts",
-      "system": "You are an API contract specialist. Generate OpenAPI specs, validate contracts, create TypeScript types via Orval."
-    },
-    "database": {
-      "description": "Cloud databases, SQL, NoSQL, migrations, optimization (200k+ context)",
-      "mode": "subagent",
-      "model": "omniroute/database",
-      "system": "You are a DBA/data engineer. Write optimized SQL, design schemas, plan migrations, optimize queries."
-    },
-    "docs": {
-      "description": "Documentation, PRs, READMEs, technical guides (1M+ context)",
-      "mode": "subagent",
-      "model": "omniroute/docs",
-      "system": "You are a technical writer. Create clear documentation, complete READMEs, PR descriptions, architecture guides."
-    }
-  }
+    "omniroute": { "name": "OmniRoute (Free Router)", "npm": "@ai-sdk/openai-compatible",
+                   "options": { "baseURL": "http://localhost:20128", "modelCacheTtl": 300000, "refreshOnList": true },
+                   "models": { /* the 6 combos, zero-cost markers */ } } },
+  "agents": { /* the 6 combos, mode primary/subagent, system prompts — unchanged */ },
+  "plugins": [ { "package": "@omniroute/opencode-plugin-v2",
+                 "options": { "providerId": "omniroute", "baseURL": "http://localhost:20128",
+                              "visibleModels": ["orchestrate","code","review","contracts","database","docs"],
+                              "managementReadToken": "{file:~/.config/opencode/secrets/omniroute.key}" } } ]
 }
 ```
 
----
+`visibleModels` is the mechanism OpenCode uses to list **only** the combos in its
+picker / model router. OmniRoute's own plugin consumes the same list.
 
-## 6. CLI Interface (Cobra)
+## 6. Plugin phase (PHASE 7 of the run)
 
-### Main Commands
+Verifies and, if needed, installs/configures `@omniroute/opencode-plugin-v2`:
+
+1. **Presence** — `opencode plugin list` (expect `omniroute-v2` `0.1.0` or newer).
+2. **Freshness** — `opencode plugin check` (expect `(current)`; else update).
+3. **If missing** — `opencode plugin add @omniroute/opencode-plugin-v2`.
+4. **If outdated** — `opencode plugin update @omniroute/opencode-plugin-v2`.
+5. **Configuration check** (parses `opencode.json`, backed by `opencode debug config`):
+   - plugin in `plugins` array with `providerId=omniroute`,
+     `baseURL=http://localhost:20128`, `visibleModels` == exactly the 6 combos,
+   - `managementReadToken` present (or `apiKey` fallback emits a warning),
+   - `provider.omniroute.models` == the 6 combos, npm == `@ai-sdk/openai-compatible`.
+6. **Auto-fix** — if anything is off, rewrite `opencode.json` atomically with backup,
+   then re-verify. Fixing covers: visibleModels, provider options, provider models.
+
+**Failure policy** — the step runs **last**; combos and the file are already written.
+On any failure:
+- **TTY**: ask — retry / exit non-zero (combos stay written) / continue with warn-only (run exits 0).
+- **Non-TTY** (daemon/systemd): **warn + continue** (exit 0), so the pipeline never
+  silently loops on a broken plugin step.
+
+Also available standalone as `omnicatalog doctor` (same checks, **no writes**) for
+diagnostics: plugin presence/version, visibleModels, provider block, management token,
+combos in OmniRoute + DB.
+
+## 7. CLI
+
 ```bash
-# Single execution (cron/manual)
-omnicatalog run [--config /path/config.yaml] [--only-new] [--force-revalidate]
-
-# systemd daemon
-omnicatalog daemon [--config /path/config.yaml]
-
-# Status and queries
-omnicatalog status
-omnicatalog models [--free] [--validated] [--provider groq] [--combo code]
+omnicatalog run                    # full automated run (phases 1-8)
+omnicatalog daemon                 # same, resident (systemd)
+omnicatalog doctor                 # plugin + config + combos health check, no writes
+omnicatalog status                 # last run + DB summary
+omnicatalog models [--free] [--validated] [--provider groq]
 omnicatalog combos [--show-current] [--diff]
-
-# Configuration
-omnicatalog config init          # Creates default config.yaml
-omnicatalog config validate      # Validates current config
-omnicatalog schedule set daily   # Sets schedule (daily/weekly/custom)
+omnicatalog config validate|init
+omnicatalog schedule set|show
+omnicatalog version
 ```
 
-### Configuration (config.yaml)
+## 8. Configuration additions
+
 ```yaml
-omniroute:
-  base_url: "http://localhost:20128"
-  api_key: "{env:OMNIROUTE_API_KEY}"
-  timeout: 30s
-
-opencode:
-  config_path: "~/.config/opencode/opencode.json"  # GLOBAL
-  backup_before_update: true
-
-validation:
-  api_tool_call_timeout: 30s
-  opencode_test_timeout: 60s
-  max_concurrent_tests: 3
-  revalidate_after_hours: 24
-
-speed_test:
-  warmup_requests: 1
-  ttft_samples: 3
-  throughput_tokens: 500
-  min_ttft_ms: 3000
-  min_tps: 20
-  tool_call_samples: 2
-
-context_validation:
-  enabled: true
-  test_tokens: 100000        # Tests with 100k token request
-  min_context_orchestrate: 1000000
-  min_context_code: 200000
-  min_context_review: 1000000
-  min_context_contracts: 200000
-  min_context_database: 200000
-  min_context_docs: 1000000
-
-free_validation:
-  enabled: true
-  window_per_provider_sec: 30
-  max_concurrent_providers: 5
-  test_method: "billing_check"  # "billing_check" | "quota_endpoint" | "usage_headers"
-  cache_ttl_hours: 24
-
-scheduler:
-  enabled: true
-  schedule: "daily"              # daily, weekly, custom (cron expression)
-  custom_cron: ""                # e.g. "0 3 * * 1,3,5" (Mon/Wed/Fri 3am)
-  run_on_startup: true
-
-database:
-  path: "~/.local/share/omnicatalog/catalog.db"
-  migration_dir: "migrations"
-
-logging:
-  level: "info"                  # debug, info, warn, error
-  format: "json"                 # json, text
-  output: "stdout"               # stdout, file, both
-  file_path: "/var/log/omnicatalog.log"
+combos:
+  catalog_file: ""        # path to a combos.yaml to override the embedded one
+plugin:
+  on_failure: "ask"       # ask (TTY) | warn_and_continue | fail
 ```
 
----
+Everything else stays as is (`free_validation` incl. `inferred_in_combos`, `database`,
+`logging` etc.). `free_validation.test_method` and other obsolete keys were removed in
+the v3.8.53 work.
 
-## 7. Systemd Service
+## 9. Acceptance criteria
 
-### `/etc/systemd/system/omnicatalog.service`
-```ini
-[Unit]
-Description=OmniRoute Model Catalog Validator for OpenCode
-After=network-online.target omniroute.service
-Wants=network-online.target
-StartLimitIntervalSec=0
+- [ ] `omnicatalog run` completes phases 1-8 end-to-end against a live OmniRoute.
+- [ ] Discovery stores free + paid models (paid never probed; tool+context filter kept).
+- [ ] Free admitted (documented/connection) validated: tool/context/speed.
+- [ ] **paid models are never probed** (verified: zero requests to paid ids in logs).
+- [ ] Each of the 6 combos gets ≥1 model, or is explicitly failed; run reports which.
+- [ ] Combos are upserted into OmniRoute with ordered fallbacks.
+- [ ] `opencode.json`: provider.omniroute == 6 combos + agents + plugin block with
+      visibleModels == 6 combos; atomic write + backup; unknown keys preserved.
+- [ ] Plugin: installed at latest, `opencode plugin list` reports it; config
+      rewritten or verified correct; non-TTY failure => warn-and-continue; TTY asks.
+- [ ] `omnicatalog doctor` reports plugin/config health without writing.
+- [ ] Re-runnable; systemd daemon behaves like `run`.
+- [ ] Merge-preserving `opencode.json` rewrite; backup present after every run.
 
-[Service]
-Type=simple
-User=emanuel
-Group=emanuel
-WorkingDirectory=/home/emanuel/Projetos/AI/omnicatalog
-ExecStart=/usr/local/bin/omnicatalog daemon --config /home/emanuel/.config/omnicatalog/config.yaml
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=omnicatalog
+## 10. Risks & mitigations
 
-# Resource limits (minimum RAM)
-MemoryLimit=256M
-MemorySwapMax=0
-CPUQuota=50%
+| Risk | Mitigation |
+|------|------------|
+| Catalog (free) stale/absent | WARN on age > `catalog_stale_days`; outage → preserve previous classification (fail closed) |
+| Combo with no eligible model | Combo explicitly failed; run reports non-zero; others proceed |
+| Plugin missing/broken (non-TTY) | warn-and-continue; TTY asks retry/fail/continue |
+| `opencode` CLI missing on host | plugin phase warns + continues (non-TTY) or asks (TTY); combos still written |
+| Wrong opencode.json gets written | atomic write + automatic `*.bak-<ts>`; `omnicatalog doctor` detects it |
+| Free quota mis-assignment (2/account) | Pool is per provider; reasoning families prefer `orchestrate`; orchestrate↔others repetition allowed, excess avoided elsewhere |
+| opencode.json rewrite races user edits | merge-preserve + atomic write + backup; user is expected to **not** hand-edit the managed keys |
 
-# Security
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/home/emanuel/.local/share/omnicatalog /home/emanuel/.config/omnicatalog /var/log/omnicatalog.log
+## 11. Implementation order
 
-[Install]
-WantedBy=multi-user.target
-```
+1. `combos.yaml` embedded + loader (`internal/combo/catalog`); glob matching; require/prefer semantics; quota distribution; ≥1 model or fail.
+2. Rework `internal/combo` assignment: catalog restriction + gates + ordering (speed→context→catalog); repetition rules; per-combo failure reporting.
+3. `opencode.json`: plugin phase (verify/install/update via `opencode` CLI), visibleModels management, auto-fix + re-verify; `doctor` command.
+4. Rewrite README (purpose, phases, doctor, config); PLAN.md = this document.
+5. Tests + live verification on the user's machine.
 
-### Installation
-```bash
-sudo cp omnicatalog /usr/local/bin/
-sudo cp omnicatalog.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now omnicatalog
-```
+## 12. Out of scope (for now)
 
----
-
-## 8. Main Execution Flow (`run`)
-
-```mermaid
-flowchart TD
-    A[Start] --> B[Load Config]
-    B --> C[Connect OmniRoute]
-    C --> D[List Connected Providers]
-    D --> E[For each Provider: Fetch Models]
-    E --> F[Filter: Tool Calling + Min Context]
-    F --> G{Provider declares\nfree tier explicitly?}
-    G -->|Yes| H[Mark is_free=true, free_confirmed=true]
-    G -->|No| I[Free Validation: 30s/provider\nReal request + billing/quota check]
-    H --> J[Direct API Tool Calling Test]
-    I --> J
-    J --> K{Passed API?}
-    K -->|No| L[Mark Failed - Next]
-    K -->|Yes| M[Real opencode Tool Calling Test]
-    M --> N{Passed OpenCode?}
-    N -->|No| L
-    N -->|Yes| O[Validate Max Context]
-    O --> P[Speed Benchmark]
-    P --> Q[Classify Speed Class]
-    Q --> R[Save to SQLite]
-    R --> S[Assign to 6 Combos by Criteria]
-    S --> T[Create/Update Combos in OmniRoute API]
-    T --> U[Generate Global opencode.json (combo refs only)]
-    U --> V[Backup + Atomic Write]
-    V --> W[End]
-```
-
----
-
-## 9. Go Dependencies (go.mod)
-
-```go
-module omnicatalog
-
-go 1.23
-
-require (
-    github.com/spf13/cobra v1.8.0
-    github.com/spf13/viper v1.19.0
-    github.com/mattn/go-sqlite3 v1.14.0
-    github.com/jmoiron/sqlx v1.3.0
-    golang.org/x/sync v0.7.0
-    golang.org/x/time v0.6.0
-    gopkg.in/yaml.v3 v3.0.1
-    github.com/rs/zerolog v1.32.0
-    github.com/robfig/cron/v3 v3.0.1
-    github.com/shirou/gopsutil/v3 v3.21.0
-)
-```
-
----
-
-## 10. Acceptance Criteria (Definition of Done)
-
-### Functional
-- [ ] `omnicatalog run` executes full validation and updates OmniRoute combos + global opencode.json
-- [ ] `omnicatalog daemon` runs as stable systemd service (< 100MB RAM)
-- [ ] Dynamic discovery of providers configured in OmniRoute
-- [ ] Correct filter: only models with tool_calling + min context
-- [ ] Free tier validation: 30s/provider (sequential same provider, parallel different providers)
-- [ ] Direct API tool call test validates in < 5s/model
-- [ ] opencode run test validates real tool calling in < 60s/model
-- [ ] Real max context validation per model
-- [ ] Benchmark measures TTFT, TPS, tool latency
-- [ ] Speed classification (ultra/fast/normal/slow) works
-- [ ] 6 combos created/updated in OmniRoute via API (orchestrate, code, review, contracts, database, docs)
-- [ ] Combos respect: min speed + min context per combo
-- [ ] Global opencode.json generated referencing ONLY combos (omniroute/*)
-- [ ] opencode-omniroute-auth plugin used for model discovery
-- [ ] CLI scheduling (daily/weekly/custom cron) works
-
-### Non-Functional
-- [ ] Memory < 100MB idle, < 256M peak
-- [ ] CPU < 10% average, peaks < 50% during validation
-- [ ] Error handling: network, timeout, API changes
-- [ ] Structured logs (JSON) for observability
-- [ ] Versioned SQLite migrations
-- [ ] Config via YAML + env vars + file secrets
-- [ ] Unit tests > 80% coverage core services
-- [ ] Reproducible build (Go modules)
-
----
-
-## 11. Implementation Order
-
-| Phase | Deliverable | Estimate |
-|-------|-------------|----------|
-| **1. Foundation** | Go project + Cobra CLI + Config (Viper) + SQLite migrations | 2-3 days |
-| **2. OmniRoute Client** | HTTP client with auth, providers, models, combos endpoints | 2 days |
-| **3. Model Discovery** | Sync providers/models → SQLite, initial filters (tool_calling + context) | 1-2 days |
-| **4. Free Validation** | Free tier test 30s/provider (sequential same provider, parallel different providers) | 2 days |
-| **5. Validation Engine** | API tool call test + opencode run test (parallel, timeouts) | 3-4 days |
-| **6. Context Validation** | Real max context validation per model | 1-2 days |
-| **7. Speed Benchmark** | TTFT, TPS, tool latency measurement + classification | 2 days |
-| **8. Combo Manager** | Creates/updates 6 combos in OmniRoute via API + generates global opencode.json | 2-3 days |
-| **9. Scheduler & Daemon** | Cron parser, systemd integration, lifecycle management | 2 days |
-| **10. Polish** | Logs, metrics, tests, docs, install script | 2-3 days |
-| **Total** | **~19-25 days** | |
-
----
-
-## 12. Risks & Mitigations
-
-| Risk | Probability | Impact | Mitigation |
-|------|-------------|--------|------------|
-| OmniRoute API changes (breaking) | Medium | High | Version detection, contract tests, graceful fallback |
-| Provider removes free tier | High | Medium | Periodic re-validation, `free_confirmed` flag with 24h TTL |
-| opencode run intermittent failures | Medium | Medium | Retry with backoff, distinguish model error vs infra error |
-| Too many models to test | High | High | Aggressive pre-filter (tool_calling + context), controlled parallelism, 24h cache |
-| Systemd service crash loop | Low | High | Health checks, circuit breaker, max restart limit |
-| Global opencode.json conflicts | Medium | Medium | Auto backup, strategic merge, dry-run flag |
-| Free validation 30s/provider fails | Medium | Medium | Per-model timeout, fallback to "assume paid", detailed logging |
-| Real context differs from catalog | Medium | High | Empirical test required, cache result, weekly re-validation |
-| OmniRoute combo create/update fails | Low | High | Idempotency, retry with backoff, post-write verification |
-
----
-
-## 13. Technical References
-
-- **OmniRoute API**: `skills/omni-providers`, `skills/omni-models`, `skills/omni-combos-routing`
-- **OmniRoute Models Endpoint**: `GET /api/v1/models`, `POST /api/v1/models/query`
-- **OpenCode Config**: `https://opencode.ai/config.json` schema
-- **OpenCode Agents**: `https://opencode.ai/docs/agents`
-- **OpenCode CLI**: `opencode run` for headless execution
-- **opencode-omniroute-auth**: Plugin reference for model fetching
-
----
-
-## 14. Polish Options (Phase 10)
-
-### Option A: Basic Polish (Recommended - Execute Now)
-**Effort: Low | Time: ~1-2 days**
-
-**Deliverables:**
-1. **Structured Logging** - JSON/text output with levels (debug/info/warn/error), rotation
-2. **Health Check CLI** - `omnicatalog health` command to verify OmniRoute connectivity, DB, config
-3. **Install Script** - `scripts/install.sh` for automated systemd installation with config prompts
-3. **Uninstall Script** - `scripts/uninstall.sh` for clean removal
-4. **Basic Documentation** - README with quickstart, config reference, troubleshooting
-5. **Config Validation** - `omnicatalog config validate` with detailed output
-6. **Shell Completions** - `omnicatalog completion bash|zsh|fish`
-7. **Install Script** - `scripts/install.sh` with interactive config setup
-
-**Files to Create:**
-- `scripts/install.sh` - Interactive installer (prompts for OmniRoute URL, API key, schedule)
-- `scripts/uninstall.sh` - Clean removal (systemd, config, DB)
-- `scripts/health.sh` - Health check endpoint logic
-- Updated README with installation guide
-- Shell completion generation in CLI
-
-### Option B: Enhanced Polish
-**Effort: Medium | Time: ~2-3 days**
-
-**Deliverables (includes A):**
-1. **Man Pages** - `omnicatalog.1` generated from CLI help
-2. **Config Validation CLI** - Extended `omnicatalog config validate` with detailed checks
-3. **Metrics Logging** - Periodic log of cache stats, validation rates, combo status
-4. **Config Migration** - Auto-migrate old config versions on startup
-5. **Dry-run Improvements** - `--dry-run` shows planned changes without executing
-5. **Config Diff** - `omnicatalog config diff` shows diff vs defaults
-6. **Log Rotation Config** - Sample logrotate config in deploy/
-7. **Shell Completions** - Enhanced with flag descriptions
-8. **Debug Mode** - `--debug` flag for verbose tracing
-
-### Option C: Production Ready
-**Effort: Medium | Time: ~2-3 days**
-
-**Deliverables (includes A+B):**
-1. **Systemd Hardening Guide** - Documentation for production deployment
-2. **Log Rotation Config** - Deploy logrotate config with size/time limits
-3. **Uninstall Verification** - Post-uninstall checks (no orphan files/processes)
-4. **Backup/Restore** - `omnicatalog backup|restore` for DB and config
-5. **Config Encryption** - Optional encryption for sensitive config values
-6. **Multi-user Support** - Per-user config isolation
-6. **SELinux/AppArmor Profiles** - Sample profiles in deploy/
-7. **Upgrade Path** - Version migration scripts
-8. **Performance Benchmarks** - CI benchmarks for regression detection
-9. **Release Automation** - GitHub Actions for build/release
-
-### Option D: Skip Polish
-- Core functionality complete, deploy as-is
-- Zero effort, immediate deploy
-
----
-
-## 14. Technical References
-
-- **OmniRoute API**: `skills/omni-providers`, `skills/omni-models`, `skills/omni-combos-routing`
-- **OmniRoute Models Endpoint**: `GET /api/v1/models`, `POST /api/v1/models/query`
-- **OpenCode Config**: `https://opencode.ai/config.json` schema
-- **OpenCode Agents**: `https://opencode.ai/docs/agents`
-- **OpenCode CLI**: `opencode run` for headless execution
-- **opencode-omniroute-auth**: Plugin reference for model fetching
+- Paid-model validation (they remain read-only catalog entries).
+- `omnicatalog run --dry-run` (removed; the `run` is intentionally destructive).
+- Web UI / dashboard (CLI + systemd only).
+- Multi-host sync (single local OmniRoute only).
