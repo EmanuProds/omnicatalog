@@ -62,11 +62,10 @@ type ContextValConfig struct {
 }
 
 type FreeValConfig struct {
-	Enabled                bool   `mapstructure:"enabled"`
-	WindowPerProviderSec   int    `mapstructure:"window_per_provider_sec"`
-	MaxConcurrentProviders int    `mapstructure:"max_concurrent_providers"`
-	TestMethod             string `mapstructure:"test_method"` // "billing_check" | "quota_endpoint" | "usage_headers"
-	CacheTTLHours          int    `mapstructure:"cache_ttl_hours"`
+	Enabled                bool `mapstructure:"enabled"`                  // classify free models during sync (deterministic)
+	MaxConcurrentProviders int  `mapstructure:"max_concurrent_providers"` // provider-level concurrency for probes
+	CatalogStaleDays       int  `mapstructure:"catalog_stale_days"`       // WARN when the free catalog is older than this
+	InferredInCombos       bool `mapstructure:"inferred_in_combos"`       // admit '(free, inferred)' models in auto combos
 }
 
 type SchedulerConfig struct {
@@ -187,12 +186,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("context_validation.min_context_database", 200000)
 	v.SetDefault("context_validation.min_context_docs", 1000000)
 
-	// Free Validation
+	// Free classification (deterministic, at sync time)
 	v.SetDefault("free_validation.enabled", true)
-	v.SetDefault("free_validation.window_per_provider_sec", 15)
 	v.SetDefault("free_validation.max_concurrent_providers", 5)
-	v.SetDefault("free_validation.test_method", "billing_check")
-	v.SetDefault("free_validation.cache_ttl_hours", 24)
+	v.SetDefault("free_validation.catalog_stale_days", 14)
+	v.SetDefault("free_validation.inferred_in_combos", false)
 
 	// Scheduler
 	v.SetDefault("scheduler.enabled", true)

@@ -23,7 +23,6 @@ type Scheduler struct {
 	store      *store.Store
 	client     *omniroute.Client
 	discovery  *discovery.Discovery
-	freeVal    *validation.FreeValidator
 	toolVal    *validation.ToolValidator
 	contextVal *validation.ContextValidator
 	speedBench *validation.SpeedBenchmark
@@ -37,7 +36,6 @@ type Scheduler struct {
 // NewScheduler creates a new scheduler
 func NewScheduler(cfg *config.Config, store *store.Store, client *omniroute.Client) *Scheduler {
 	discovery := discovery.NewDiscovery(cfg, store)
-	freeVal := validation.NewFreeValidator(cfg, store, discovery, client)
 	toolVal := validation.NewToolValidator(cfg, store, discovery, client)
 	contextVal := validation.NewContextValidator(cfg, store, discovery, client)
 	speedBench := validation.NewSpeedBenchmark(cfg, store, discovery, client)
@@ -48,7 +46,6 @@ func NewScheduler(cfg *config.Config, store *store.Store, client *omniroute.Clie
 		store:      store,
 		client:     client,
 		discovery:  discovery,
-		freeVal:    freeVal,
 		toolVal:    toolVal,
 		contextVal: contextVal,
 		speedBench: speedBench,
@@ -184,36 +181,29 @@ func (s *Scheduler) runPipeline() {
 		return
 	}
 
-	// Phase 2: Free tier validation
-	log.Info().Msg("Phase 2: Free tier validation")
-	if err := s.freeVal.ValidateFreeTier(ctx); err != nil {
-		log.Error().Err(err).Msg("Free tier validation failed")
-		return
-	}
-
-	// Phase 3: Tool calling validation
-	log.Info().Msg("Phase 3: Tool calling validation")
+	// Phase 2: Tool calling validation
+	log.Info().Msg("Phase 2: Tool calling validation")
 	if err := s.toolVal.ValidateToolCalling(ctx); err != nil {
 		log.Error().Err(err).Msg("Tool calling validation failed")
 		return
 	}
 
-	// Phase 4: Context validation
-	log.Info().Msg("Phase 4: Context validation")
+	// Phase 3: Context validation
+	log.Info().Msg("Phase 3: Context validation")
 	if err := s.contextVal.ValidateContext(ctx); err != nil {
 		log.Error().Err(err).Msg("Context validation failed")
 		return
 	}
 
-	// Phase 5: Speed benchmark
-	log.Info().Msg("Phase 5: Speed benchmark")
+	// Phase 4: Speed benchmark
+	log.Info().Msg("Phase 4: Speed benchmark")
 	if err := s.speedBench.RunBenchmarks(ctx); err != nil {
 		log.Error().Err(err).Msg("Speed benchmark failed")
 		return
 	}
 
-	// Phase 6: Combo update
-	log.Info().Msg("Phase 6: Combo update")
+	// Phase 5: Combo update
+	log.Info().Msg("Phase 5: Combo update")
 	if err := s.comboMgr.UpdateCombos(ctx); err != nil {
 		log.Error().Err(err).Msg("Combo update failed")
 		return

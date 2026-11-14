@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -18,44 +17,8 @@ import (
 func setupContextValidator(t *testing.T) (*ContextValidator, *store.Store, *omniroute.Client, func()) {
 	tmpDir := t.TempDir()
 	dbPath := tmpDir + "/test.db"
-	migrationDir := tmpDir + "/migrations"
 
-	if err := os.MkdirAll(migrationDir, 0755); err != nil {
-		t.Fatalf("error creating migration dir: %v", err)
-	}
-
-	schemaSQL := `
-CREATE TABLE IF NOT EXISTS providers (
-    id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL,
-    free_tier BOOLEAN DEFAULT 0, last_checked DATETIME, metadata JSON
-);
-CREATE TABLE IF NOT EXISTS models (
-    id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, name TEXT NOT NULL,
-    context_window INTEGER, max_output_tokens INTEGER, supports_tools BOOLEAN DEFAULT 0,
-    supports_vision BOOLEAN DEFAULT 0, supports_reasoning BOOLEAN DEFAULT 0,
-    pricing_input REAL, pricing_output REAL, is_free BOOLEAN DEFAULT 0,
-    free_confirmed BOOLEAN DEFAULT 0, free_tested_at DATETIME,
-    capabilities JSON, discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (provider_id) REFERENCES providers(id)
-);
-CREATE TABLE IF NOT EXISTS validations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, model_id TEXT NOT NULL,
-    validation_type TEXT NOT NULL, status TEXT NOT NULL, details JSON,
-    tested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (model_id) REFERENCES models(id)
-);
-CREATE TABLE IF NOT EXISTS benchmarks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, model_id TEXT NOT NULL UNIQUE,
-    ttft_ms INTEGER, tps REAL, total_ms INTEGER, tool_latency_ms INTEGER,
-    speed_class TEXT, benchmarked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (model_id) REFERENCES models(id)
-);
-`
-	if err := os.WriteFile(migrationDir+"/001_initial_schema.sql", []byte(schemaSQL), 0644); err != nil {
-		t.Fatalf("error writing migration: %v", err)
-	}
-
-	s, err := store.NewStore(dbPath, migrationDir)
+	s, err := store.NewStore(dbPath, "")
 	if err != nil {
 		t.Fatalf("error creating store: %v", err)
 	}
@@ -164,10 +127,8 @@ CREATE TABLE IF NOT EXISTS benchmarks (
 		},
 		FreeVal: config.FreeValConfig{
 			Enabled:                true,
-			WindowPerProviderSec:   30,
 			MaxConcurrentProviders: 5,
-			TestMethod:             "billing_check",
-			CacheTTLHours:          24,
+			CatalogStaleDays:       14,
 		},
 	}
 
@@ -176,16 +137,15 @@ CREATE TABLE IF NOT EXISTS benchmarks (
 	validator := NewContextValidator(cfg, s, disc, client)
 
 	ctx := context.Background()
-	disc.SyncAll(ctx)
-
-	// Mark models as free confirmed for tool calling validation to pass
-	models, _ := s.GetModels(store.ModelFilter{})
-	for _, m := range models {
-		m.FreeConfirmed = true
-		s.UpsertModel(&m)
+	if err := disc.SyncAll(ctx); err != nil {
+		t.Fatalf("SyncAll failed: %v", err)
 	}
 
 	// Add speed benchmarks for context validation
+	models, err := s.GetModels(store.ModelFilter{})
+	if err != nil {
+		t.Fatalf("GetModels failed: %v", err)
+	}
 	for _, m := range models {
 		s.SaveBenchmark(&store.Benchmark{
 			ModelID:       m.ID,

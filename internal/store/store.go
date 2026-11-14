@@ -115,6 +115,26 @@ func (s *Store) MigrateFS(fsys fs.FS) error {
 }
 
 func (s *Store) runMigration(name string, content []byte) error {
+	// Migration tracking: SQLite has no "ADD COLUMN IF NOT EXISTS",
+	// so each migration is recorded in schema_migrations and applied
+	// exactly once. Legacy installs re-apply 001/002 harmlessly
+	// (they use IF NOT EXISTS) before being recorded.
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		return fmt.Errorf("error creating schema_migrations table: %w", err)
+	}
+
+	var applied int
+	if err := s.db.Get(&applied, `SELECT COUNT(*) FROM schema_migrations WHERE name = ?`, name); err == nil && applied > 0 {
+		return nil
+	}
+
+	// Execute the whole migration atomically so a failure cannot leave
+	// a half-applied migration behind.
+	tx, err := s.db.Beginx()
+	if err != nil {
+		return fmt.Errorf("error beginning migration %s: %w", name, err)
+	}
+
 	// Execute each statement separately (SQLite doesn't support multi-statement natively)
 	statements := splitStatements(string(content))
 	for _, stmt := range statements {
@@ -122,11 +142,17 @@ func (s *Store) runMigration(name string, content []byte) error {
 		if stmt == "" {
 			continue
 		}
-		if _, err := s.db.Exec(stmt); err != nil {
+		if _, err := tx.Exec(stmt); err != nil {
+			_ = tx.Rollback()
 			return fmt.Errorf("error executing migration %s: %w\nStatement: %s", name, err, stmt[:min(200, len(stmt))])
 		}
 	}
-	return nil
+
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO schema_migrations(name) VALUES (?)`, name); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("error recording migration %s: %w", name, err)
+	}
+	return tx.Commit()
 }
 
 func splitStatements(sql string) []string {
@@ -134,9 +160,28 @@ func splitStatements(sql string) []string {
 	var current strings.Builder
 	inString := false
 	stringChar := byte(0)
+	inLineComment := false
 
 	for i := 0; i < len(sql); i++ {
 		ch := sql[i]
+
+		// Skip full-line SQL comments: their text may contain semicolons
+		// which are not statement terminators.
+		if !inString && !inLineComment && ch == '-' && i+1 < len(sql) && sql[i+1] == '-' {
+			trimmed := strings.TrimSpace(sql[:i])
+			if i == 0 || sql[i-1] == '\n' || trimmed == "" {
+				inLineComment = true
+				continue
+			}
+		}
+		if inLineComment {
+			if ch == '\n' {
+				inLineComment = false
+				current.WriteByte(ch)
+			}
+			continue
+		}
+
 		current.WriteByte(ch)
 
 		if !inString && (ch == '"' || ch == '\'') {
@@ -257,10 +302,12 @@ func (s *Store) UpsertModel(model *Model) error {
 	query := `
 		INSERT INTO models (id, provider_id, name, context_window, max_output_tokens,
 			supports_tools, supports_vision, supports_reasoning,
-			pricing_input, pricing_output, is_free, free_confirmed, free_tested_at, capabilities, discovered_at)
+			pricing_input, pricing_output, is_free, free_confirmed, free_tested_at, capabilities, discovered_at,
+			free_source, free_type, pool_key, free_catalog_updated_at)
 		VALUES (:id, :provider_id, :name, :context_window, :max_output_tokens,
 			:supports_tools, :supports_vision, :supports_reasoning,
-			:pricing_input, :pricing_output, :is_free, :free_confirmed, :free_tested_at, :capabilities, :discovered_at)
+			:pricing_input, :pricing_output, :is_free, :free_confirmed, :free_tested_at, :capabilities, :discovered_at,
+			:free_source, :free_type, :pool_key, :free_catalog_updated_at)
 		ON CONFLICT(id) DO UPDATE SET
 			provider_id = excluded.provider_id,
 			name = excluded.name,
@@ -274,44 +321,34 @@ func (s *Store) UpsertModel(model *Model) error {
 			is_free = excluded.is_free,
 			free_confirmed = excluded.free_confirmed,
 			free_tested_at = excluded.free_tested_at,
-			capabilities = excluded.capabilities
+			capabilities = excluded.capabilities,
+			free_source = excluded.free_source,
+			free_type = excluded.free_type,
+			pool_key = excluded.pool_key,
+			free_catalog_updated_at = excluded.free_catalog_updated_at
 	`
 	_, err := s.db.NamedExec(query, &modelNamed{
-		ID:                model.ID,
-		ProviderID:        model.ProviderID,
-		Name:              model.Name,
-		ContextWindow:     model.ContextWindow,
-		MaxOutputTokens:   model.MaxOutputTokens,
-		SupportsTools:     model.SupportsTools,
-		SupportsVision:    model.SupportsVision,
-		SupportsReasoning: model.SupportsReasoning,
-		PricingInput:      model.PricingInput,
-		PricingOutput:     model.PricingOutput,
-		IsFree:            model.IsFree,
-		FreeConfirmed:     model.FreeConfirmed,
-		FreeTestedAt:      model.FreeTestedAt,
-		Capabilities:      string(capabilities),
-		DiscoveredAt:      model.DiscoveredAt,
+		ID:                  model.ID,
+		ProviderID:          model.ProviderID,
+		Name:                model.Name,
+		ContextWindow:       model.ContextWindow,
+		MaxOutputTokens:     model.MaxOutputTokens,
+		SupportsTools:       model.SupportsTools,
+		SupportsVision:      model.SupportsVision,
+		SupportsReasoning:   model.SupportsReasoning,
+		PricingInput:        model.PricingInput,
+		PricingOutput:       model.PricingOutput,
+		IsFree:              model.IsFree,
+		FreeConfirmed:       model.FreeConfirmed,
+		FreeTestedAt:        model.FreeTestedAt,
+		Capabilities:        string(capabilities),
+		DiscoveredAt:        model.DiscoveredAt,
+		FreeSource:          model.FreeSource,
+		FreeType:            model.FreeType,
+		PoolKey:             model.PoolKey,
+		FreeCatalogSyncedAt: model.FreeCatalogSyncedAt,
 	})
 	return err
-}
-
-type modelNamed struct {
-	ID                string   `db:"id"`
-	ProviderID        string   `db:"provider_id"`
-	Name              string   `db:"name"`
-	ContextWindow     *int     `db:"context_window"`
-	MaxOutputTokens   *int     `db:"max_output_tokens"`
-	SupportsTools     bool     `db:"supports_tools"`
-	SupportsVision    bool     `db:"supports_vision"`
-	SupportsReasoning bool     `db:"supports_reasoning"`
-	PricingInput      *float64 `db:"pricing_input"`
-	PricingOutput     *float64 `db:"pricing_output"`
-	IsFree            bool     `db:"is_free"`
-	FreeConfirmed     bool     `db:"free_confirmed"`
-	FreeTestedAt      *string  `db:"free_tested_at"`
-	Capabilities      string   `db:"capabilities"`
-	DiscoveredAt      string   `db:"discovered_at"`
 }
 
 func (s *Store) GetModels(filter ModelFilter) ([]Model, error) {
@@ -329,6 +366,14 @@ func (s *Store) GetModels(filter ModelFilter) ([]Model, error) {
 	if filter.FreeConfirmed != nil {
 		query += " AND free_confirmed = ?"
 		args = append(args, *filter.FreeConfirmed)
+	}
+	if len(filter.FreeSourceIn) > 0 {
+		placeholders := make([]string, len(filter.FreeSourceIn))
+		for i, src := range filter.FreeSourceIn {
+			placeholders[i] = "?"
+			args = append(args, src)
+		}
+		query += " AND free_source IN (" + strings.Join(placeholders, ",") + ")"
 	}
 	if filter.SupportsTools != nil {
 		query += " AND supports_tools = ?"
@@ -354,21 +399,25 @@ func (s *Store) GetModels(filter ModelFilter) ([]Model, error) {
 			json.Unmarshal([]byte(m.Capabilities), &caps)
 		}
 		models[i] = Model{
-			ID:                m.ID,
-			ProviderID:        m.ProviderID,
-			Name:              m.Name,
-			ContextWindow:     m.ContextWindow,
-			MaxOutputTokens:   m.MaxOutputTokens,
-			SupportsTools:     m.SupportsTools,
-			SupportsVision:    m.SupportsVision,
-			SupportsReasoning: m.SupportsReasoning,
-			PricingInput:      m.PricingInput,
-			PricingOutput:     m.PricingOutput,
-			IsFree:            m.IsFree,
-			FreeConfirmed:     m.FreeConfirmed,
-			FreeTestedAt:      m.FreeTestedAt,
-			Capabilities:      caps,
-			DiscoveredAt:      m.DiscoveredAt,
+			ID:                  m.ID,
+			ProviderID:          m.ProviderID,
+			Name:                m.Name,
+			ContextWindow:       m.ContextWindow,
+			MaxOutputTokens:     m.MaxOutputTokens,
+			SupportsTools:       m.SupportsTools,
+			SupportsVision:      m.SupportsVision,
+			SupportsReasoning:   m.SupportsReasoning,
+			PricingInput:        m.PricingInput,
+			PricingOutput:       m.PricingOutput,
+			IsFree:              m.IsFree,
+			FreeConfirmed:       m.FreeConfirmed,
+			FreeTestedAt:        m.FreeTestedAt,
+			Capabilities:        caps,
+			DiscoveredAt:        m.DiscoveredAt,
+			FreeSource:          m.FreeSource,
+			FreeType:            m.FreeType,
+			PoolKey:             m.PoolKey,
+			FreeCatalogSyncedAt: m.FreeCatalogSyncedAt,
 		}
 	}
 	return models, nil
@@ -389,25 +438,41 @@ func (s *Store) GetModel(id string) (*Model, error) {
 		json.Unmarshal([]byte(m.Capabilities), &caps)
 	}
 	return &Model{
-		ID:                m.ID,
-		ProviderID:        m.ProviderID,
-		Name:              m.Name,
-		ContextWindow:     m.ContextWindow,
-		MaxOutputTokens:   m.MaxOutputTokens,
-		SupportsTools:     m.SupportsTools,
-		SupportsVision:    m.SupportsVision,
-		SupportsReasoning: m.SupportsReasoning,
-		PricingInput:      m.PricingInput,
-		PricingOutput:     m.PricingOutput,
-		IsFree:            m.IsFree,
-		FreeConfirmed:     m.FreeConfirmed,
-		FreeTestedAt:      m.FreeTestedAt,
-		Capabilities:      caps,
-		DiscoveredAt:      m.DiscoveredAt,
+		ID:                  m.ID,
+		ProviderID:          m.ProviderID,
+		Name:                m.Name,
+		ContextWindow:       m.ContextWindow,
+		MaxOutputTokens:     m.MaxOutputTokens,
+		SupportsTools:       m.SupportsTools,
+		SupportsVision:      m.SupportsVision,
+		SupportsReasoning:   m.SupportsReasoning,
+		PricingInput:        m.PricingInput,
+		PricingOutput:       m.PricingOutput,
+		IsFree:              m.IsFree,
+		FreeConfirmed:       m.FreeConfirmed,
+		FreeTestedAt:        m.FreeTestedAt,
+		Capabilities:        caps,
+		DiscoveredAt:        m.DiscoveredAt,
+		FreeSource:          m.FreeSource,
+		FreeType:            m.FreeType,
+		PoolKey:             m.PoolKey,
+		FreeCatalogSyncedAt: m.FreeCatalogSyncedAt,
 	}, nil
 }
 
-func (s *Store) GetValidatedModels(minContext int) ([]ValidatedModel, error) {
+// GetValidatedModels returns models eligible for combos: free by documented
+// catalog or connection flag ('inferred' models only when includeInferred is
+// true), with tool calling and a usable speed benchmark.
+func (s *Store) GetValidatedModels(minContext int, includeInferred bool) ([]ValidatedModel, error) {
+	sources := []string{"documented", "connection"}
+	if includeInferred {
+		sources = append(sources, "inferred")
+	}
+	placeholders := make([]string, len(sources))
+	args := make([]interface{}, len(sources))
+	for i, src := range sources {
+		placeholders[i], args[i] = "?", src
+	}
 	query := `
 		SELECT m.id, m.provider_id, m.name, m.context_window, m.max_output_tokens,
 			m.supports_tools, m.supports_vision, m.supports_reasoning,
@@ -415,7 +480,7 @@ func (s *Store) GetValidatedModels(minContext int) ([]ValidatedModel, error) {
 			b.speed_class, b.ttft_ms, b.tps, b.tool_latency_ms, b.benchmarked_at
 		FROM models m
 		LEFT JOIN benchmarks b ON m.id = b.model_id
-		WHERE m.free_confirmed = 1
+		WHERE m.free_source IN (` + strings.Join(placeholders, ",") + `)
 		  AND m.supports_tools = 1
 		  AND m.context_window IS NOT NULL
 		  AND b.speed_class IS NOT NULL
@@ -423,9 +488,10 @@ func (s *Store) GetValidatedModels(minContext int) ([]ValidatedModel, error) {
 	`
 	if minContext > 0 {
 		query += " AND m.context_window >= ?"
+		args = append(args, minContext)
 	}
 	var modelsRaw []ValidatedModelNamed
-	err := s.db.Select(&modelsRaw, query, minContext)
+	err := s.db.Select(&modelsRaw, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -704,22 +770,50 @@ type Provider struct {
 	Metadata    map[string]any `db:"metadata" json:"metadata,omitempty"`
 }
 
+// modelNamed carries the flat SQL shape of a row in models.
+// Free-model classification provenance comes from migration 003.
+type modelNamed struct {
+	ID                  string   `db:"id"`
+	ProviderID          string   `db:"provider_id"`
+	Name                string   `db:"name"`
+	ContextWindow       *int     `db:"context_window"`
+	MaxOutputTokens     *int     `db:"max_output_tokens"`
+	SupportsTools       bool     `db:"supports_tools"`
+	SupportsVision      bool     `db:"supports_vision"`
+	SupportsReasoning   bool     `db:"supports_reasoning"`
+	PricingInput        *float64 `db:"pricing_input"`
+	PricingOutput       *float64 `db:"pricing_output"`
+	IsFree              bool     `db:"is_free"`
+	FreeConfirmed       bool     `db:"free_confirmed"`
+	FreeTestedAt        *string  `db:"free_tested_at"`
+	Capabilities        string   `db:"capabilities"`
+	DiscoveredAt        string   `db:"discovered_at"`
+	FreeSource          string   `db:"free_source"`
+	FreeType            string   `db:"free_type"`
+	PoolKey             string   `db:"pool_key"`
+	FreeCatalogSyncedAt *string  `db:"free_catalog_updated_at"`
+}
+
 type Model struct {
-	ID                string         `db:"id" json:"id"`
-	ProviderID        string         `db:"provider_id" json:"provider_id"`
-	Name              string         `db:"name" json:"name"`
-	ContextWindow     *int           `db:"context_window" json:"context_window,omitempty"`
-	MaxOutputTokens   *int           `db:"max_output_tokens" json:"max_output_tokens,omitempty"`
-	SupportsTools     bool           `db:"supports_tools" json:"supports_tools"`
-	SupportsVision    bool           `db:"supports_vision" json:"supports_vision"`
-	SupportsReasoning bool           `db:"supports_reasoning" json:"supports_reasoning"`
-	PricingInput      *float64       `db:"pricing_input" json:"pricing_input,omitempty"`
-	PricingOutput     *float64       `db:"pricing_output" json:"pricing_output,omitempty"`
-	IsFree            bool           `db:"is_free" json:"is_free"`
-	FreeConfirmed     bool           `db:"free_confirmed" json:"free_confirmed"`
-	FreeTestedAt      *string        `db:"free_tested_at" json:"free_tested_at,omitempty"`
-	Capabilities      map[string]any `db:"capabilities" json:"capabilities,omitempty"`
-	DiscoveredAt      string         `db:"discovered_at" json:"discovered_at"`
+	ID                  string         `db:"id" json:"id"`
+	ProviderID          string         `db:"provider_id" json:"provider_id"`
+	Name                string         `db:"name" json:"name"`
+	ContextWindow       *int           `db:"context_window" json:"context_window,omitempty"`
+	MaxOutputTokens     *int           `db:"max_output_tokens" json:"max_output_tokens,omitempty"`
+	SupportsTools       bool           `db:"supports_tools" json:"supports_tools"`
+	SupportsVision      bool           `db:"supports_vision" json:"supports_vision"`
+	SupportsReasoning   bool           `db:"supports_reasoning" json:"supports_reasoning"`
+	PricingInput        *float64       `db:"pricing_input" json:"pricing_input,omitempty"`
+	PricingOutput       *float64       `db:"pricing_output" json:"pricing_output,omitempty"`
+	IsFree              bool           `db:"is_free" json:"is_free"`
+	FreeConfirmed       bool           `db:"free_confirmed" json:"free_confirmed"`
+	FreeTestedAt        *string        `db:"free_tested_at" json:"free_tested_at,omitempty"`
+	Capabilities        map[string]any `db:"capabilities" json:"capabilities,omitempty"`
+	DiscoveredAt        string         `db:"discovered_at" json:"discovered_at"`
+	FreeSource          string         `db:"free_source" json:"free_source"`
+	FreeType            string         `db:"free_type" json:"free_type,omitempty"`
+	PoolKey             string         `db:"pool_key" json:"pool_key,omitempty"`
+	FreeCatalogSyncedAt *string        `db:"free_catalog_updated_at" json:"free_catalog_updated_at,omitempty"`
 }
 
 type ValidatedModel struct {
@@ -747,6 +841,7 @@ type ModelFilter struct {
 	FreeConfirmed *bool
 	SupportsTools *bool
 	MinContext    int
+	FreeSourceIn  []string // match any of the given free_source values (e.g. "documented", "connection")
 }
 
 type Validation struct {

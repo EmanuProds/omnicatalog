@@ -39,7 +39,7 @@ func NewRootCommand(cfg *config.Config, version, commit, buildDate string) *cobr
 
 	// Global flags
 	rootCmd.PersistentFlags().String("config", "", "Path to config file (default: auto-detect)")
-	rootCmd.PersistentFlags().Bool("dry-run", false, "Simulate execution without saving changes")
+
 
 	// Subcommands
 	rootCmd.AddCommand(newRunCommand(cfg))
@@ -73,9 +73,8 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Executes full validation (manual or cron)",
-		Long:  `Discovers providers/models, validates free tier, tool calling, context and speed, updates combos in OmniRoute and opencode.json.`,
+		Long:  `Discovers providers/models, classifies free models against the OmniRoute documented free catalog, validates tool calling, context and speed, updates combos in OmniRoute and opencode.json.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			onlyNew, _ := cmd.Flags().GetBool("only-new")
 			forceRevalidate, _ := cmd.Flags().GetBool("force-revalidate")
 			testAll, _ := cmd.Flags().GetBool("all")
@@ -88,7 +87,6 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 			}
 
 			log.Info().
-				Bool("dry_run", dryRun).
 				Bool("only_new", onlyNew).
 				Bool("force_revalidate", forceRevalidate).
 				Msg("Starting full validation")
@@ -108,7 +106,6 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 			defer storeInstance.Close()
 
 			discoverySvc := discovery.NewDiscovery(cfg, storeInstance)
-			freeValidator := validation.NewFreeValidator(cfg, storeInstance, discoverySvc, client)
 			toolValidator := validation.NewToolValidator(cfg, storeInstance, discoverySvc, client)
 			contextValidator := validation.NewContextValidator(cfg, storeInstance, discoverySvc, client)
 			speedBench := validation.NewSpeedBenchmark(cfg, storeInstance, discoverySvc, client)
@@ -193,7 +190,7 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 						}
 						modelItems := make([]SelectItem, 0, len(mods))
 						for _, m := range mods {
-							selM := strings.HasSuffix(m.ID, ":free") || strings.Contains(strings.ToLower(m.ID), "free")
+							selM := m.IsFree
 							if len(preselectedModels) > 0 {
 								selM = preselectedModels[m.ID]
 							}
@@ -255,32 +252,26 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 				}
 			}
 
-			// Phase 2: Free tier validation
-			log.Info().Msg("Phase 2: Free tier validation")
-			if err := freeValidator.ValidateFreeTier(ctx); err != nil {
-				return fmt.Errorf("free tier validation failed: %w", err)
-			}
-
-			// Phase 3: Tool calling validation
-			log.Info().Msg("Phase 3: Tool calling validation")
+			// Phase 2: Tool calling validation (free models classified at sync time)
+			log.Info().Msg("Phase 2: Tool calling validation")
 			if err := toolValidator.ValidateToolCalling(ctx); err != nil {
 				return fmt.Errorf("tool calling validation failed: %w", err)
 			}
 
-			// Phase 4: Context validation
-			log.Info().Msg("Phase 4: Context validation")
+			// Phase 3: Context validation
+			log.Info().Msg("Phase 3: Context validation")
 			if err := contextValidator.ValidateContext(ctx); err != nil {
 				return fmt.Errorf("context validation failed: %w", err)
 			}
 
-			// Phase 5: Speed benchmark
-			log.Info().Msg("Phase 5: Speed benchmark")
+			// Phase 4: Speed benchmark
+			log.Info().Msg("Phase 4: Speed benchmark")
 			if err := speedBench.RunBenchmarks(ctx); err != nil {
 				return fmt.Errorf("speed benchmark failed: %w", err)
 			}
 
-			// Phase 6: Combo update
-			log.Info().Msg("Phase 6: Combo update")
+			// Phase 5: Combo update
+			log.Info().Msg("Phase 5: Combo update")
 			if err := comboMgr.UpdateCombos(ctx); err != nil {
 				return fmt.Errorf("combo update failed: %w", err)
 			}
@@ -296,10 +287,6 @@ func newRunCommand(cfg *config.Config) *cobra.Command {
 				fmt.Printf("  %-14s %-10s %-10s %s\n", c.ID, c.MinSpeedClass, ctx, strings.Join(c.TargetModelIDs, ", "))
 			}
 			fmt.Printf("\n  opencode.json: %s\n", cfg.OpenCode.ConfigPath)
-
-			if dryRun {
-				log.Info().Msg("DRY-RUN: No changes would be saved")
-			}
 
 			log.Info().Msg("Full validation completed successfully")
 			return nil
@@ -427,8 +414,13 @@ func newModelsCommand(cfg *config.Config) *cobra.Command {
 			fmt.Printf("=== Models (%d) ===\n", len(models))
 			for _, m := range models {
 				freeIcon := "💰"
+				freeNote := ""
 				if m.IsFree {
 					freeIcon = "🆓"
+					freeNote = " free:" + m.FreeType
+					if m.FreeSource == "inferred" {
+						freeNote = " free:inferred"
+					}
 				}
 				toolIcon := "🔧"
 				if !m.SupportsTools {
@@ -438,8 +430,8 @@ func newModelsCommand(cfg *config.Config) *cobra.Command {
 				if m.ContextWindow != nil {
 					ctx = formatTokens(*m.ContextWindow)
 				}
-				fmt.Printf("  %s %s %s | %s | Context: %s | Provider: %s\n",
-					freeIcon, toolIcon, m.ID, m.Name, ctx, m.ProviderID)
+				fmt.Printf("  %s %s %s | %s | Context: %s | Provider: %s%s\n",
+					freeIcon, toolIcon, m.ID, m.Name, ctx, m.ProviderID, freeNote)
 			}
 			return nil
 		},
@@ -827,7 +819,8 @@ func runAutoSelection(cfg *config.Config) error {
 		return fmt.Errorf("sync failed: %w", err)
 	}
 
-	// Get models that are explicitly free (pricing=0 or :free suffix) - don't filter by supports_tools yet
+	// Get models classified as free (documented in the OmniRoute free catalog,
+	// connection auto-confirm, or inferred) - don't filter by supports_tools yet
 	// (some models may not have supports_tools set correctly in DB yet)
 	filter := store.ModelFilter{
 		IsFree: boolPtr(true),
@@ -837,18 +830,13 @@ func runAutoSelection(cfg *config.Config) error {
 		return fmt.Errorf("failed to get models: %w", err)
 	}
 
-	// Filter to only explicitly free models (free_confirmed or :free suffix or pricing=0)
 	testTokens := cfg.ContextVal.TestTokens
 	if testTokens <= 0 {
 		testTokens = 8000
 	}
 	var candidates []store.Model
 	for _, m := range models {
-		isExplicitFree := m.FreeConfirmed ||
-			strings.HasSuffix(m.ID, ":free") ||
-			(m.PricingInput != nil && *m.PricingInput == 0 && m.PricingOutput != nil && *m.PricingOutput == 0)
-
-		if !isExplicitFree {
+		if !m.IsFree {
 			continue
 		}
 		if m.ContextWindow == nil || *m.ContextWindow < testTokens {
@@ -873,7 +861,7 @@ func runAutoSelection(cfg *config.Config) error {
 			"devin-cli-agentic":     true,
 			"kiro":                  true,
 		}
-		if apiCompatibleProviders[m.ProviderID] && isExplicitFree && m.ProviderID != "combo" {
+		if apiCompatibleProviders[m.ProviderID] && m.ProviderID != "combo" {
 			candidates = append(candidates, m)
 		}
 	}
@@ -1090,11 +1078,6 @@ func runManualSelection(cfg *config.Config) error {
 	discoverySvc.SetSelectedModels(selectedModelIDs)
 
 	// Run full validation pipeline on selected models
-	freeValidator := validation.NewFreeValidator(cfg, storeInstance, discoverySvc, client)
-	if err := freeValidator.ValidateFreeTier(ctx); err != nil {
-		log.Warn().Err(err).Msg("Free tier validation had errors")
-	}
-
 	toolValidator := validation.NewToolValidator(cfg, storeInstance, discoverySvc, client)
 	if err := toolValidator.ValidateToolCalling(ctx); err != nil {
 		log.Warn().Err(err).Msg("Tool calling validation had errors")
@@ -1142,9 +1125,9 @@ func runDebugSelection(cfg *config.Config) error {
 		return fmt.Errorf("sync failed: %w", err)
 	}
 
-	// Get models that don't have free_confirmed=true (unknown free status)
+	// Debug probes admitted free models that have not passed validation yet
 	filter := store.ModelFilter{
-		FreeConfirmed: boolPtr(false),
+		FreeConfirmed: boolPtr(true),
 		SupportsTools: boolPtr(true),
 	}
 	models, err := storeInstance.GetModels(filter)
@@ -1206,12 +1189,7 @@ func runDebugSelection(cfg *config.Config) error {
 	discoverySvc.SetSelectedModels(selectedModelIDs)
 
 	// Run FULL validation pipeline on selected models
-	fmt.Println("  Running full validation pipeline (free, tool, context, speed)...")
-
-	freeValidator := validation.NewFreeValidator(cfg, storeInstance, discoverySvc, client)
-	if err := freeValidator.ValidateFreeTier(ctx); err != nil {
-		log.Warn().Err(err).Msg("Free tier validation had errors")
-	}
+	fmt.Println("  Running full validation pipeline (tool, context, speed) on admitted free models...")
 
 	toolValidator := validation.NewToolValidator(cfg, storeInstance, discoverySvc, client)
 	if err := toolValidator.ValidateToolCalling(ctx); err != nil {

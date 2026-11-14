@@ -1,5 +1,16 @@
 # Plan: OmniRoute Model Validator for OpenCode
 
+> **Status note (2026-11-14)**: The free-model validation described in §1
+> ("Providers Needing Free Tier Validation" — 30s window, `billing_check`
+> probing) was replaced by **deterministic classification against OmniRoute's
+> documented free-tier catalog** (`/api/free-tier/summary`) as of the
+> OmniRoute v3.8.53 upgrade. Free admission = documented catalog
+> (recurring/* + keyless) or `importFreeModelsOnly=true` connections.
+> Inferred free (pricing "0" / `:free` suffix) is cataloged but excluded
+> from combos. See README "Free-model classification" and
+> `migrations/003_free_catalog.sql`. Sections describing probes of paid
+> models for billing detection are obsolete.
+
 ## Overview
 A **Go** program executed as a **systemd service** on Linux that:
 1. Queries OmniRoute API to discover configured providers and their models

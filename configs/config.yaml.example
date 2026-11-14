@@ -36,10 +36,9 @@ context_validation:
 
 free_validation:
   enabled: true
-  window_per_provider_sec: 30
-  max_concurrent_providers: 5
-  test_method: "billing_check"  # "billing_check" | "quota_endpoint" | "usage_headers"
-  cache_ttl_hours: 24
+  max_concurrent_providers: 5   # provider-level concurrency for probes
+  catalog_stale_days: 14        # WARN when the free catalog is older than this
+  inferred_in_combos: false     # admit '(free, inferred)' models (pricing 0 / :free suffix) in auto combos
 
 scheduler:
   enabled: true

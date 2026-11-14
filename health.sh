@@ -68,7 +68,7 @@ check_database() {
     if sqlite3 "$db_path" "SELECT 1;" >/dev/null 2>&1; then
         log_success "Database accessible: $db_path"
         # Count models
-        local model_count=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM models WHERE free_confirmed=1;" 2>/dev/null || echo 0)
+        local model_count=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM models WHERE free_source IN ('documented','connection');" 2>/dev/null || echo 0)
         log_info "Validated models in catalog: $model_count"
         return 0
     else

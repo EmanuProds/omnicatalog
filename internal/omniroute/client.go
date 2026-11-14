@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"omnicatalog/internal/config"
@@ -66,10 +68,72 @@ func (m *Model) ContextWindow() int {
 	return m.ContextLength
 }
 
-// ModelPricing represents model pricing
+// ModelPricing represents model pricing, normalized to USD per 1M tokens.
+// OmniRoute v3.8.53 publishes two coexisting shapes inside the same object:
+//   - legacy numeric per-1M-token fields: input, output
+//   - OpenRouter-compatible decimal strings per token: prompt, completion
+//
+// Free models read "0". An unknown price omits the object entirely, so a nil
+// *ModelPricing means "pricing unknown", not "free".
 type ModelPricing struct {
-	Input  float64 `json:"input"`
-	Output float64 `json:"output"`
+	Input        float64 `json:"-"` // USD per 1M input tokens (normalized)
+	Output       float64 `json:"-"` // USD per 1M output tokens (normalized)
+	ExplicitZero bool    `json:"-"` // true when upstream explicitly priced both directions at zero
+}
+
+func (p *ModelPricing) UnmarshalJSON(b []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return fmt.Errorf("failed to decode pricing: %w", err)
+	}
+
+	// Accepts either a JSON number or a (quoted) decimal string.
+	num := func(key string) (float64, bool) {
+		v, ok := raw[key]
+		if !ok {
+			return 0, false
+		}
+		var f float64
+		if err := json.Unmarshal(v, &f); err == nil {
+			return f, true
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err != nil {
+			return 0, false
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return 0, false
+		}
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	}
+
+	inLegacy, hasInLegacy := num("input")
+	outLegacy, hasOutLegacy := num("output")
+	prompt, hasPrompt := num("prompt")             // USD per token
+	completion, hasCompletion := num("completion") // USD per token
+
+	var in, out float64
+	var hasIn, hasOut bool
+	if hasInLegacy {
+		in, hasIn = inLegacy, true
+	} else if hasPrompt {
+		in, hasIn = prompt*1e6, true
+	}
+	if hasOutLegacy {
+		out, hasOut = outLegacy, true
+	} else if hasCompletion {
+		out, hasOut = completion*1e6, true
+	}
+
+	p.Input = in
+	p.Output = out
+	p.ExplicitZero = hasIn && hasOut && in == 0 && out == 0
+	return nil
 }
 
 // ModelCapabilities represents model capabilities
@@ -134,26 +198,43 @@ type ComboRequest struct {
 	Description string       `json:"description,omitempty"`
 }
 
-// CatalogModel represents a model in the full catalog
-type CatalogModel struct {
-	ID                string            `json:"id"`
-	Provider          string            `json:"provider"`
-	Name              string            `json:"name"`
-	ContextWindow     int               `json:"context_window"`
-	MaxOutputTokens   int               `json:"max_output_tokens"`
-	SupportsTools     bool              `json:"supports_tools"`
-	SupportsVision    bool              `json:"supports_vision"`
-	SupportsReasoning bool              `json:"supports_reasoning"`
-	Pricing           *ModelPricing     `json:"pricing,omitempty"`
-	Capabilities      ModelCapabilities `json:"capabilities,omitempty"`
-	Free              bool              `json:"free"`
-	Description       string            `json:"description,omitempty"`
+// FreeTierModel is one entry of OmniRoute's documented free-tier catalog
+// (GET /api/free-tier/summary). freeType classifies the kind of free access:
+// recurring-daily, recurring-monthly, recurring-uncapped, recurring-credit,
+// keyless (all admitted), one-time-initial and discontinued (not admitted).
+type FreeTierModel struct {
+	Provider      string `json:"provider"`
+	ModelID       string `json:"modelId"`
+	DisplayName   string `json:"displayName"`
+	MonthlyTokens int64  `json:"monthlyTokens"`
+	CreditTokens  int64  `json:"creditTokens"`
+	FreeType      string `json:"freeType"`
+	PoolKey       string `json:"poolKey"`
+	ToS           string `json:"tos"`
 }
 
-// CatalogResponse represents the full catalog response
-type CatalogResponse struct {
-	Object string         `json:"object"`
-	Data   []CatalogModel `json:"data"`
+// FreeTierSummary is the documented free-model catalog snapshot.
+type FreeTierSummary struct {
+	CatalogUpdatedAt string          `json:"catalogUpdatedAt"`
+	CatalogSource    string          `json:"catalogSource"`
+	ModelCount       int             `json:"modelCount"`
+	PerModel         []FreeTierModel `json:"perModel"`
+}
+
+// PricingModelsEntry is one model entry inside a provider slot of
+// GET /api/pricing/models.
+type PricingModelsEntry struct {
+	ID string `json:"id"`
+}
+
+// PricingModelsProvider mirrors one provider slot of GET /api/pricing/models.
+// The map key is the connection alias (e.g. "kc"), slot.ID is the canonical
+// provider slug (e.g. "kilocode"); both map onto the model id prefix.
+type PricingModelsProvider struct {
+	ID     string               `json:"id"`
+	Alias  string               `json:"alias"`
+	Name   string               `json:"name"`
+	Models []PricingModelsEntry `json:"models"`
 }
 
 // NewClient creates a new OmniRoute client
@@ -250,7 +331,7 @@ func (c *Client) GetProviders(ctx context.Context) ([]Provider, error) {
 				ID:       slug,
 				Name:     slug,
 				Status:   "disconnected",
-				FreeTier: true,
+				FreeTier: false, // only an explicit importFreeModelsOnly=true admits auto-confirm
 				Metadata: map[string]any{"connections": []string{}},
 			}
 			by[slug] = p
@@ -259,9 +340,11 @@ func (c *Client) GetProviders(ctx context.Context) ([]Provider, error) {
 		if conn.IsActive {
 			p.Status = "connected"
 		}
-		// connections that do not exclusively import free models make provider not guaranteed free
-		if v, ok := conn.ProviderSpecificData["importFreeModelsOnly"].(bool); ok && !v {
-			p.FreeTier = false
+		// Only an explicit per-connection opt-in (importFreeModelsOnly=true)
+		// makes the provider a documented free route. Absent or false means
+		// unknown/paid: fail closed.
+		if v, ok := conn.ProviderSpecificData["importFreeModelsOnly"].(bool); ok && v {
+			p.FreeTier = true
 		}
 		conns := p.Metadata["connections"].([]string)
 		conns = append(conns, conn.ID)
@@ -440,9 +523,9 @@ func (c *Client) DeleteCombo(ctx context.Context, id string) error {
 	return nil
 }
 
-// GetCatalog gets the full model catalog
-func (c *Client) GetCatalog(ctx context.Context) ([]CatalogModel, error) {
-	resp, err := c.doRequest(ctx, http.MethodGet, "/api/models/catalog", nil)
+// GetFreeTierCatalog fetches the documented free-model catalog
+func (c *Client) GetFreeTierCatalog(ctx context.Context) (*FreeTierSummary, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, "/api/free-tier/summary", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -450,15 +533,37 @@ func (c *Client) GetCatalog(ctx context.Context) ([]CatalogModel, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to get catalog: %s - %s", resp.Status, string(body))
+		return nil, fmt.Errorf("failed to get free tier catalog: %s - %s", resp.Status, string(body))
 	}
 
-	var result CatalogResponse
+	var result FreeTierSummary
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode catalog response: %w", err)
+		return nil, fmt.Errorf("failed to decode free tier catalog response: %w", err)
 	}
 
-	return result.Data, nil
+	return &result, nil
+}
+
+// GetPricingModels fetches the provider catalog incl. alias mappings
+// (map key = alias, slot.ID = canonical slug), used to normalize model ids
+func (c *Client) GetPricingModels(ctx context.Context) (map[string]PricingModelsProvider, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, "/api/pricing/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get pricing models: %s - %s", resp.Status, string(body))
+	}
+
+	var result map[string]PricingModelsProvider
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode pricing models response: %w", err)
+	}
+
+	return result, nil
 }
 
 // TestModel tests a model with a simple request

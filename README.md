@@ -7,9 +7,9 @@ OmniRoute Model Validator for OpenCode — Discovers, validates, and catalogs **
 Runs as a **systemd service** in background (minimal RAM), OmniCatalog:
 
 1. **Discovers** providers and models configured in OmniRoute via API
-2. **Filters** free models with tool calling support
-3. **Validates** real functionality:
-   - Quick test: Direct API (`/v1/chat/completions` with tools)
+2. **Classifies** free models against OmniRoute's documented free-tier catalog (`/api/free-tier/summary`) — deterministic, no billing/usage probes are sent
+3. **Validates admitted free models only**:
+   - Tool calling: Direct API (`/v1/chat/completions` with tools)
    - Real test: `opencode run` with subagent using tools
 4. **Validates** maximum context empirically per model
 5. **Benchmarks** speed (TTFT, TPS, tool latency) → classification (ultra/fast/normal/slow/rejected)
@@ -29,7 +29,7 @@ Runs as a **systemd service** in background (minimal RAM), OmniCatalog:
 | `database` | Normal | **200k** | Cloud DB, SQL, NoSQL, migrations |
 | `docs` | Slow | **1M** | Documentation, PRs, READMEs |
 
-> OpenCode only sees combos via `opencode-omniroute-auth` plugin — automatic fallback, RTK+Caveman compression, quota-aware routing.
+> OpenCode only sees combos via `@omniroute/opencode-plugin-v2` — automatic fallback, RTK+Caveman compression, quota-aware routing. The plugin filters with the same documented catalog (`freeOnly`); omnicatalog admits only the same model set plus provider connections flagged `importFreeModelsOnly`.
 
 ---
 
@@ -39,7 +39,7 @@ Runs as a **systemd service** in background (minimal RAM), OmniCatalog:
 - **Go 1.23+** (for build)
 - **OmniRoute** running at `http://localhost:20128` (or configurable)
 - **OpenCode** installed and configured
-- **Plugin** `opencode-omniroute-auth` in OpenCode
+- **Plugin** `@omniroute/opencode-plugin-v2` in OpenCode
 
 ---
 
@@ -87,6 +87,26 @@ opencode:
 # ... other settings (validation, speed_test, context_validation, free_validation, scheduler, database, logging)
 ```
 
+Free-model classification is deterministic and happens during sync — OmniRoute's documented catalog is the source of truth, not billing probes:
+
+```yaml
+free_validation:
+  enabled: true
+  max_concurrent_providers: 5  # provider-level concurrency for probes
+  catalog_stale_days: 14       # WARN when the documented free catalog is older than this
+  inferred_in_combos: false    # admit '(free, inferred)' models (pricing 0 / :free suffix) in auto combos
+```
+
+| Class | Source | Admitted into combos/probes |
+|-------|--------|------------------------------|
+| `documented` | model matches `/api/free-tier/summary` with recurring (`recurring-daily/monthly/uncapped/credit`) or `keyless` freeType | yes |
+| `connection` | provider connection has `importFreeModelsOnly=true` | yes |
+| `inferred` | pricing `"0"` (either upstream shape) or `:free`/`-free` id suffix, not in catalog | no (labeled `(free, inferred)`) |
+| `one-time-initial` / `discontinued` | catalog entry exists but is not recurring | no (cataloged, not free) |
+
+If the catalog cannot be fetched during a sync, the previously stored classification is preserved (never downgraded); new models fall back to inference only. Models with tool calling are never probed unless classified admitted-free — paid or unknown models are never sent to probes.
+```
+
 Set OmniRoute API key:
 ```bash
 # Via environment variable
@@ -104,7 +124,7 @@ chmod 600 ~/.config/omnicatalog/api_key
 ### CLI Commands
 ```bash
 # Single run (manual/cron)
-omnicatalog run [--only-new] [--force-revalidate] [--dry-run]
+omnicatalog run [--only-new] [--force-revalidate]
 
 # Daemon (systemd)
 omnicatalog daemon

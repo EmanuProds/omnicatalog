@@ -1,7 +1,6 @@
 package store
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,95 +9,8 @@ import (
 func setupTestStore(t *testing.T) (*Store, func()) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
-	migrationDir := filepath.Join(tmpDir, "migrations")
 
-	// Copy migration to temp dir
-	err := os.MkdirAll(migrationDir, 0755)
-	if err != nil {
-		t.Fatalf("error creating migration dir: %v", err)
-	}
-	err = os.WriteFile(filepath.Join(migrationDir, "001_initial_schema.sql"), []byte(`
-CREATE TABLE IF NOT EXISTS providers (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    status TEXT NOT NULL,
-    free_tier BOOLEAN DEFAULT 0,
-    last_checked DATETIME,
-    metadata JSON
-);
-
-CREATE TABLE IF NOT EXISTS models (
-    id TEXT PRIMARY KEY,
-    provider_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    context_window INTEGER,
-    max_output_tokens INTEGER,
-    supports_tools BOOLEAN DEFAULT 0,
-    supports_vision BOOLEAN DEFAULT 0,
-    supports_reasoning BOOLEAN DEFAULT 0,
-    pricing_input REAL,
-    pricing_output REAL,
-    is_free BOOLEAN DEFAULT 0,
-    free_confirmed BOOLEAN DEFAULT 0,
-    free_tested_at DATETIME,
-    capabilities JSON,
-    discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (provider_id) REFERENCES providers(id)
-);
-
-CREATE TABLE IF NOT EXISTS validations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    model_id TEXT NOT NULL,
-    validation_type TEXT NOT NULL,
-    status TEXT NOT NULL,
-    details JSON,
-    tested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (model_id) REFERENCES models(id)
-);
-
-CREATE TABLE IF NOT EXISTS benchmarks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    model_id TEXT NOT NULL UNIQUE,
-    ttft_ms INTEGER,
-    tps REAL,
-    total_ms INTEGER,
-    tool_latency_ms INTEGER,
-    speed_class TEXT,
-    benchmarked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (model_id) REFERENCES models(id)
-);
-
-CREATE TABLE IF NOT EXISTS omnicatalog_combos (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    description TEXT,
-    target_model_ids JSON,
-    fallback_model_ids JSON,
-    required_capabilities JSON,
-    min_speed_class TEXT,
-    min_context_window INTEGER,
-    strategy TEXT DEFAULT 'auto',
-    enabled BOOLEAN DEFAULT 1,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS scheduler_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_type TEXT NOT NULL,
-    status TEXT NOT NULL,
-    models_tested INTEGER DEFAULT 0,
-    models_passed INTEGER DEFAULT 0,
-    models_failed INTEGER DEFAULT 0,
-    duration_ms INTEGER,
-    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    completed_at DATETIME
-);
-`), 0644)
-	if err != nil {
-		t.Fatalf("error writing migration: %v", err)
-	}
-
-	s, err := NewStore(dbPath, migrationDir)
+	s, err := NewStore(dbPath, "")
 	if err != nil {
 		t.Fatalf("error creating store: %v", err)
 	}

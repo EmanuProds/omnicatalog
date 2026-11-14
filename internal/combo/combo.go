@@ -115,7 +115,7 @@ func (m *ComboManager) UpdateCombos(ctx context.Context) error {
 	log.Info().Msg("Starting combo update")
 
 	// Get validated models
-	validatedModels, err := m.store.GetValidatedModels(0)
+	validatedModels, err := m.store.GetValidatedModels(0, m.config.FreeVal.InferredInCombos)
 	if err != nil {
 		return fmt.Errorf("failed to get validated models: %w", err)
 	}

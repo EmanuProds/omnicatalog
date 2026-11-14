@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -15,63 +14,16 @@ import (
 )
 
 func setupTestDiscovery(t *testing.T) (*Discovery, *store.Store, func()) {
-	// Create test store
 	tmpDir := t.TempDir()
 	dbPath := tmpDir + "/test.db"
-	migrationDir := tmpDir + "/migrations"
 
-	err := os.MkdirAll(migrationDir, 0755)
-	if err != nil {
-		t.Fatalf("error creating migration dir: %v", err)
-	}
-
-	// Write minimal migration
-	err = os.WriteFile(migrationDir+"/001_initial_schema.sql", []byte(`
-CREATE TABLE IF NOT EXISTS providers (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    status TEXT NOT NULL,
-    free_tier BOOLEAN DEFAULT 0,
-    last_checked DATETIME,
-    metadata JSON
-);
-
-CREATE TABLE IF NOT EXISTS models (
-    id TEXT PRIMARY KEY,
-    provider_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    context_window INTEGER,
-    max_output_tokens INTEGER,
-    supports_tools BOOLEAN DEFAULT 0,
-    supports_vision BOOLEAN DEFAULT 0,
-    supports_reasoning BOOLEAN DEFAULT 0,
-    pricing_input REAL,
-    pricing_output REAL,
-    is_free BOOLEAN DEFAULT 0,
-    free_confirmed BOOLEAN DEFAULT 0,
-    free_tested_at DATETIME,
-    capabilities JSON,
-    discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (provider_id) REFERENCES providers(id)
-);
-
-CREATE TABLE IF NOT EXISTS benchmarks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, model_id TEXT NOT NULL UNIQUE,
-    ttft_ms INTEGER, tps REAL, total_ms INTEGER, tool_latency_ms INTEGER,
-    speed_class TEXT, benchmarked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (model_id) REFERENCES models(id)
-);
-`), 0644)
-	if err != nil {
-		t.Fatalf("error writing migration: %v", err)
-	}
-
-	s, err := store.NewStore(dbPath, migrationDir)
+	// Use embedded migrations (covers 001+002+003)
+	s, err := store.NewStore(dbPath, "")
 	if err != nil {
 		t.Fatalf("error creating store: %v", err)
 	}
 
-	// Create mock OmniRoute server
+	today := time.Now().Format("2006-01-02")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		if auth != "Bearer test-key" {
@@ -80,55 +32,51 @@ CREATE TABLE IF NOT EXISTS benchmarks (
 
 		switch r.URL.Path {
 		case "/api/providers":
-			if r.Method == http.MethodGet {
-				response := map[string]any{
-					"object": "list",
-					"data": []map[string]any{
-						{"id": "anthropic", "name": "Anthropic", "status": "connected", "free_tier": false},
-						{"id": "groq", "name": "Groq", "status": "connected", "free_tier": true},
-						{"id": "openai", "name": "OpenAI", "status": "connected", "free_tier": false},
-					},
-				}
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(response)
+			if r.Method != http.MethodGet {
+				return
 			}
+			response := map[string]any{
+				"object": "list",
+				"data": []map[string]any{
+					{"id": "anthropic", "name": "Anthropic", "status": "connected", "free_tier": false},
+					{"id": "groq", "name": "Groq", "status": "connected", "free_tier": true},
+					{"id": "openai", "name": "OpenAI", "status": "connected", "free_tier": false},
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
 		case "/api/v1/models":
-			if r.Method == http.MethodGet {
-				response := omniroute.ModelsResponse{
-					Object: "list",
-					Data: []omniroute.Model{
-						{
-							ID:              "anthropic/claude-sonnet-4-6",
-							Object:          "model",
-							OwnedBy:         "anthropic",
-							ContextLength:   1000000,
-							MaxOutputTokens: 8192,
-							Pricing:         &omniroute.ModelPricing{Input: 0, Output: 0},
-							Capabilities:    omniroute.ModelCapabilities{ToolCalling: true, Vision: true},
-						},
-						{
-							ID:              "groq/llama-3.1-70b",
-							Object:          "model",
-							OwnedBy:         "groq",
-							ContextLength:   131072,
-							MaxOutputTokens: 8192,
-							Pricing:         &omniroute.ModelPricing{Input: 0, Output: 0},
-							Capabilities:    omniroute.ModelCapabilities{ToolCalling: true},
-						},
-						{
-							ID:              "openai/gpt-4o",
-							Object:          "model",
-							OwnedBy:         "openai",
-							ContextLength:   128000,
-							MaxOutputTokens: 4096,
-							Pricing:         &omniroute.ModelPricing{Input: 5.0, Output: 15.0},
-							Capabilities:    omniroute.ModelCapabilities{ToolCalling: true},
-						},
-					},
-				}
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(response)
+			if r.Method != http.MethodGet {
+				return
 			}
+			// Raw upstream shapes: numeric legacy pricing (per 1M) with explicit zeros for free
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"object":"list","data":[
+				{"id":"anthropic/claude-sonnet-4-6","object":"model","owned_by":"anthropic","context_length":1000000,"max_output_tokens":8192,"pricing":{"input":0,"output":0},"capabilities":{"tool_calling":true,"vision":true}},
+				{"id":"groq/llama-3.1-70b","object":"model","owned_by":"groq","context_length":131072,"max_output_tokens":8192,"pricing":{"input":0,"output":0},"capabilities":{"tool_calling":true}},
+				{"id":"openai/gpt-4o","object":"model","owned_by":"openai","context_length":128000,"max_output_tokens":4096,"pricing":{"input":5,"output":15},"capabilities":{"tool_calling":true}}
+			]}`))
+		case "/api/free-tier/summary":
+			if r.Method != http.MethodGet {
+				return
+			}
+			response := omniroute.FreeTierSummary{
+				CatalogUpdatedAt: today,
+				CatalogSource:    "baseline",
+				ModelCount:       1,
+				PerModel: []omniroute.FreeTierModel{
+					{Provider: "anthropic", ModelID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6",
+						MonthlyTokens: 1000000000, FreeType: "recurring-monthly", PoolKey: "anthropic", ToS: "caution"},
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+		case "/api/pricing/models":
+			if r.Method != http.MethodGet {
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]omniroute.PricingModelsProvider{})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -146,6 +94,11 @@ CREATE TABLE IF NOT EXISTS benchmarks (
 		},
 		Validation: config.ValidationConfig{
 			RevalidateAfterHours: 0, // Disable revalidation for tests
+		},
+		FreeVal: config.FreeValConfig{
+			Enabled:                true,
+			MaxConcurrentProviders: 5,
+			CatalogStaleDays:       14,
 		},
 	}
 
@@ -195,9 +148,9 @@ func TestDiscovery_SyncModels(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	err := d.SyncModels(ctx)
+	err := d.SyncAll(ctx) // providers first: free-tier flags come from connections
 	if err != nil {
-		t.Fatalf("SyncModels failed: %v", err)
+		t.Fatalf("SyncAll failed: %v", err)
 	}
 
 	models, err := s.GetModels(store.ModelFilter{})
@@ -210,18 +163,31 @@ func TestDiscovery_SyncModels(t *testing.T) {
 		t.Fatalf("expected 3 models, got %d", len(models))
 	}
 
-	// Check that free models are marked correctly
-	freeCount := 0
+	// Classification is deterministic:
+	//   anthropic -> documented (catalog entry, freeType recurring-monthly)
+	//   groq      -> connection (provider importFreeModelsOnly)
+	//   openai    -> not free (priced > 0, no catalog entry)
+	byID := map[string]store.Model{}
 	for _, m := range models {
-		if m.IsFree {
-			freeCount++
-		}
+		byID[m.ID] = m
 	}
-	// groq model has pricing 0, so should be free
-	// openai has pricing > 0, so not free
-	// anthropic has pricing 0, so free
-	if freeCount != 2 {
-		t.Errorf("expected 2 free models, got %d", freeCount)
+
+	anth := byID["anthropic/claude-sonnet-4-6"]
+	if !anth.IsFree || anth.FreeSource != FreeSourceDocumented || anth.FreeType != "recurring-monthly" {
+		t.Errorf("anthropic model misclassified: is_free=%v source=%q type=%q", anth.IsFree, anth.FreeSource, anth.FreeType)
+	}
+	if !anth.FreeConfirmed {
+		t.Errorf("documented model must be admitted (free_confirmed=true)")
+	}
+
+	groqModel := byID["groq/llama-3.1-70b"]
+	if !groqModel.IsFree || groqModel.FreeSource != FreeSourceConnection {
+		t.Errorf("groq model misclassified: is_free=%v source=%q", groqModel.IsFree, groqModel.FreeSource)
+	}
+
+	oai := byID["openai/gpt-4o"]
+	if oai.IsFree {
+		t.Errorf("openai model must not be free (priced > 0)")
 	}
 }
 
@@ -246,78 +212,40 @@ func TestDiscovery_SyncAll(t *testing.T) {
 	}
 }
 
-func TestDiscovery_GetModelsForFreeValidation(t *testing.T) {
-	d, _, cleanup := setupTestDiscovery(t)
-	defer cleanup()
-
-	ctx := context.Background()
-
-	// First sync to populate DB
-	err := d.SyncAll(ctx)
-	if err != nil {
-		t.Fatalf("SyncAll failed: %v", err)
-	}
-
-	// Get models for free validation
-	models, err := d.GetModelsForFreeValidation(ctx)
-	if err != nil {
-		t.Fatalf("GetModelsForFreeValidation failed: %v", err)
-	}
-
-	// Should return models where IsFree=true and FreeConfirmed=false
-	if len(models) != 2 {
-		t.Errorf("expected 2 models for free validation, got %d", len(models))
-	}
-}
-
 func TestDiscovery_GetModelsForToolCallingValidation(t *testing.T) {
 	d, s, cleanup := setupTestDiscovery(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	// First sync
+	// First sync: free classification happens at sync time
 	err := d.SyncAll(ctx)
 	if err != nil {
 		t.Fatalf("SyncAll failed: %v", err)
 	}
 
-	// Check free models
-	freeModels, _ := d.GetModelsForFreeValidation(ctx)
-	t.Logf("Free models: %d", len(freeModels))
-	for _, m := range freeModels {
-		t.Logf("  %s: IsFree=%v, FreeConfirmed=%v, SupportsTools=%v", m.ID, m.IsFree, m.FreeConfirmed, m.SupportsTools)
+	stored, _ := s.GetModels(store.ModelFilter{IsFree: boolPtr(true)})
+	t.Logf("Free models after sync: %d", len(stored))
+	for _, m := range stored {
+		t.Logf("  %s: source=%s type=%s confirmed=%v", m.ID, m.FreeSource, m.FreeType, m.FreeConfirmed)
 	}
 
-	// Manually mark free models as confirmed
-	for _, m := range freeModels {
-		m.FreeConfirmed = true
-		t.Logf("Upserting %s with FreeConfirmed=%v", m.ID, m.FreeConfirmed)
-		if err := s.UpsertModel(&m); err != nil {
-			t.Logf("Upsert error: %v", err)
-		}
-	}
-
-	// Verify the update
-	updatedModels, _ := s.GetModels(store.ModelFilter{FreeConfirmed: boolPtr(true)})
-	t.Logf("Models with FreeConfirmed=true: %d", len(updatedModels))
-	for _, m := range updatedModels {
-		t.Logf("  %s: FreeConfirmed=%v, SupportsTools=%v", m.ID, m.FreeConfirmed, m.SupportsTools)
-	}
-
-	// Now get models for tool calling validation
+	// Get models admitted to tool calling validation (documented/connection)
 	models, err := d.GetModelsForToolCallingValidation(ctx)
 	if err != nil {
 		t.Fatalf("GetModelsForToolCallingValidation failed: %v", err)
 	}
 
-	t.Logf("Tool calling models: %d", len(models))
-	for _, m := range models {
-		t.Logf("  %s: FreeConfirmed=%v, SupportsTools=%v", m.ID, m.FreeConfirmed, m.SupportsTools)
-	}
-
 	if len(models) != 2 {
 		t.Errorf("expected 2 models for tool calling validation, got %d", len(models))
+	}
+	for _, m := range models {
+		if m.FreeSource != FreeSourceDocumented && m.FreeSource != FreeSourceConnection {
+			t.Errorf("model %s has unexpected free_source %q (admitted: documented|connection)", m.ID, m.FreeSource)
+		}
+		if !m.FreeConfirmed {
+			t.Errorf("admitted model %s must have free_confirmed=true", m.ID)
+		}
 	}
 }
 
